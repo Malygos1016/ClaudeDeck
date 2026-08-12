@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ClaudeDeck · 会话详情</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ccircle cx='8' cy='8' r='5' fill='%23e2a13c'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="/assets/app.css">
+</head>
+<body data-page="session">
+
+<header class="deck-header">
+  <a class="wordmark" href="/">Claude<b>Deck</b></a>
+  <nav class="deck-nav" id="nav"></nav>
+  <div class="header-spacer"></div>
+  <div id="annunciator" class="annunciator" hidden></div>
+  <button id="rescan" class="ghost-btn" title="立即增量扫描并归档">重新扫描</button>
+  <div class="scanbar" id="scanbar" hidden>
+    <div class="scanbar-fill"></div>
+    <span class="scanbar-label mono"></span>
+  </div>
+</header>
+
+<main class="wrap">
+  <section class="panel-card sess-head">
+    <div class="sess-title-row">
+      <h1 id="s-title" class="sess-title">加载中…</h1>
+      <span id="s-badges"></span>
+      <span class="row-actions" id="s-actions"></span>
+    </div>
+    <div class="row-meta" id="s-meta"></div>
+    <div class="subagent-row" id="s-subagents"></div>
+  </section>
+
+  <div id="src-note" class="notice" hidden></div>
+
+  <section class="chat">
+    <button id="load-earlier" class="ghost-btn load-btn" hidden>↑ 加载更早</button>
+    <div id="msgs"></div>
+    <button id="load-later" class="ghost-btn load-btn" hidden>↓ 加载更新</button>
+  </section>
+</main>
+
+<aside id="drawer" class="drawer" hidden>
+  <div class="drawer-head">
+    <span class="mono" id="drawer-title"></span>
+    <button id="drawer-close" class="ghost-btn">关闭</button>
+  </div>
+  <div id="drawer-body" class="drawer-body"></div>
+</aside>
+
+<div id="toast" class="toast" hidden></div>
+<script type="module" src="/assets/session.js"></script>
+</body>
+</html>

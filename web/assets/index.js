@@ -40,7 +40,7 @@ function rowHtml(s, extra = "") {
   return `
   <div class="session-row" data-sid="${esc(s.session_id)}">
     <div class="row-top">
-      <span class="row-title" title="${esc(s.title || "")}">${esc(s.title || "(无标题)")}</span>
+      <a class="row-title" href="/session.html?sid=${esc(s.session_id)}" title="${esc(s.title || "")}">${esc(s.title || "(无标题)")}</a>
       ${badges(s)}
       <span class="row-actions">${actionsHtml(s)}</span>
     </div>
@@ -81,7 +81,8 @@ function renderSearch(res) {
       const hits = g.hits
         .map(
           (h) =>
-            `<div class="hit"><span class="kind">${esc(h.kind)}</span>${h.snippet_html}</div>`
+            `<a class="hit" href="/session.html?sid=${esc(g.session.session_id)}${h.seq >= 0 ? `&seq=${h.seq}` : ""}">` +
+            `<span class="kind">${esc(h.kind)}</span>${h.snippet_html}</a>`
         )
         .join("");
       return `<div class="hit-group">${rowHtml(g.session, `<div class="hits">${hits}</div>`)}</div>`;

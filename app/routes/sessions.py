@@ -1,13 +1,16 @@
-"""会话列表 / 搜索 / 详情 / resume 命令。"""
+"""会话列表 / 搜索 / 详情 / 聊天视图消息 / 导出 / resume 命令。"""
 from __future__ import annotations
 
 import html
 import sqlite3
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi.responses import PlainTextResponse
 
 from ..launcher import build_resume_command
 from ..live import read_live_sessions
+from ..render import export_markdown, parse_view_items, resolve_transcript_path, window
 from ..search import MARK_L, MARK_R, search as do_search
 from ..transcript import bridge_url
 from . import request_db
@@ -134,6 +137,98 @@ def session_detail(
         if p.is_file():
             plan = {"slug": row["slug"], "path": str(p)}
     return {"session": _session_out(row), "subagents": subagents, "plan": plan}
+
+
+def _session_row(con: sqlite3.Connection, sid: str) -> sqlite3.Row:
+    row = con.execute("SELECT * FROM sessions WHERE session_id=?", (sid.lower(),)).fetchone()
+    if row is None:
+        raise HTTPException(404, "库中没有该会话,先扫描?")
+    return row
+
+
+def _resolved_path(request: Request, row: sqlite3.Row) -> tuple[Path, str]:
+    res = resolve_transcript_path(request.app.state.cfg, row["proj_dir"], row["session_id"])
+    if res is None:
+        raise HTTPException(410, "该会话的源文件与归档副本都不存在(可能被清理且未及归档)")
+    return res
+
+
+@router.get("/sessions/{sid}/messages")
+def session_messages(
+    sid: str,
+    request: Request,
+    limit: int = Query(80, ge=1, le=400),
+    around_seq: int | None = None,
+    before_seq: int | None = None,
+    after_seq: int | None = None,
+    show_system: bool = False,
+    con: sqlite3.Connection = Depends(request_db),
+):
+    row = _session_row(con, sid)
+    path, source = _resolved_path(request, row)
+    items = parse_view_items(path)
+    win = window(
+        items,
+        limit=limit,
+        around_seq=around_seq,
+        before_seq=before_seq,
+        after_seq=after_seq,
+        show_system=show_system,
+    )
+    win["source"] = source
+    return win
+
+
+@router.get("/sessions/{sid}/subagents/{agent_id}/messages")
+def subagent_messages(
+    sid: str,
+    agent_id: str,
+    request: Request,
+    limit: int = Query(200, ge=1, le=400),
+    before_seq: int | None = None,
+    show_system: bool = False,
+    con: sqlite3.Connection = Depends(request_db),
+):
+    arow = con.execute(
+        "SELECT * FROM subagents WHERE agent_id=? AND session_id=?", (agent_id, sid.lower())
+    ).fetchone()
+    if arow is None or not arow["file_path"]:
+        raise HTTPException(404, "没有该子 agent 的记录")
+    cfg = request.app.state.cfg
+    path = Path(arow["file_path"])
+    source = "live"
+    if not path.is_file():
+        # 源被清理:把 projects 根前缀换成归档根,尝试归档副本
+        try:
+            rel = path.relative_to(cfg.projects_root)
+            path = cfg.archive_projects_root / rel
+            source = "archive"
+        except ValueError:
+            pass
+    if not path.is_file():
+        raise HTTPException(410, "子 agent transcript 的源文件与归档副本都不存在")
+    items = parse_view_items(path)
+    win = window(items, limit=limit, before_seq=before_seq, show_system=show_system)
+    win["source"] = source
+    return win
+
+
+@router.get("/sessions/{sid}/export")
+def export_session(
+    sid: str,
+    request: Request,
+    con: sqlite3.Connection = Depends(request_db),
+):
+    row = _session_row(con, sid)
+    path, _source = _resolved_path(request, row)
+    items = parse_view_items(path)
+    md = export_markdown(items, dict(row))
+    fname = f"claude-session-{sid.lower()[:8]}.md"
+    return PlainTextResponse(
+        md,
+        media_type="text/markdown; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+    )
 
 
 @router.get("/sessions/{sid}/command")
