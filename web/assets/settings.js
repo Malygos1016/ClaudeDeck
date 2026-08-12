@@ -3,7 +3,7 @@ import { api, armConfirm, esc, fmtBytes, initHeader, toast } from "./common.js";
 
 const $ = (id) => document.getElementById(id);
 const FIELDS = [
-  "archive_dir", "scan_interval_seconds", "archive_quiet_minutes",
+  "archive_dir", "scan_interval_seconds",
   "live_poll_ms", "port", "claude_exe", "index_thinking", "index_tool_results",
 ];
 

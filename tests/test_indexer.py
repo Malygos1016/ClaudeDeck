@@ -173,16 +173,21 @@ def test_history_orphan_synth_then_real_transcript(cfg):
     assert n == 0
 
 
-def test_archive_quiet_then_source_missing_then_restore(cfg):
+def test_manual_seal_then_source_missing_then_restore(cfg):
+    """归档=手动封存:扫描绝不自动拷贝;只有 force_archive 产生快照(用户拍板 2026-08-12)。"""
     p = make_session_file(cfg, base_lines())
     idx, con = new_indexer(cfg)
 
     st = idx.scan_once()
-    assert st["archived_copies"] == 0  # 文件还新鲜,安静期内不拷
+    assert st["archived_copies"] == 0
 
     make_old(p, minutes=30)
     st = idx.scan_once()
-    assert st["archived_copies"] == 1
+    assert st["archived_copies"] == 0  # 安静多久都不自动归档
+    row = con.execute("SELECT archived_at FROM sessions WHERE session_id=?", (SID,)).fetchone()
+    assert row["archived_at"] is None
+
+    idx.force_archive(SID)  # 手动封存
     archived = cfg.archive_projects_root / PROJ / f"{SID}.jsonl"
     assert archived.is_file()
     row = con.execute("SELECT archived_at FROM sessions WHERE session_id=?", (SID,)).fetchone()

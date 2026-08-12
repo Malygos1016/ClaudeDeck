@@ -152,10 +152,10 @@ function renderHeader(det) {
   const actions = [];
   if (s.running) {
     actions.push('<span class="badge running">运行中·去那个窗口继续</span>');
-    actions.push(`<button class="ghost-btn" id="btn-archive" title="无视安静期立即镜像到归档区">立即归档</button>`);
+    actions.push(`<button class="ghost-btn" id="btn-archive" title="事情做完了就封存:拷贝到归档区并标记已归档(唯一的备份途径)">封存</button>`);
   } else if (!s.source_missing) {
     actions.push(`<button class="ghost-btn primary" id="btn-resume">恢复 ▶</button>`);
-    actions.push(`<button class="ghost-btn" id="btn-archive" title="无视安静期立即镜像到归档区">立即归档</button>`);
+    actions.push(`<button class="ghost-btn" id="btn-archive" title="事情做完了就封存:拷贝到归档区并标记已归档(唯一的备份途径)">封存</button>`);
   } else if (s.archived) {
     actions.push(`<button class="ghost-btn primary" id="btn-restore">还原到 projects</button>`);
   }
@@ -163,7 +163,6 @@ function renderHeader(det) {
     `<button class="ghost-btn" id="btn-cmd">复制命令</button>`,
     `<a class="ghost-btn" href="/api/sessions/${esc(SID)}/export" title="导出 Markdown">导出 MD</a>`
   );
-  if (s.bridge_url) actions.push(`<a class="ghost-btn" href="${esc(s.bridge_url)}" target="_blank" rel="noopener">网页 ↗</a>`);
   actions.push(
     `<label class="ghost-btn sys-toggle"><input type="checkbox" id="sys-toggle"> 系统事件</label>`
   );
@@ -179,7 +178,7 @@ function renderHeader(det) {
   });
   $("btn-archive")?.addEventListener("click", async () => {
     const res = await api(`/api/sessions/${SID}/archive`, { json: {} });
-    toast(`已归档(伴生文件 ${res.companion_copied} 个)`);
+    toast(`已封存(伴生文件 ${res.companion_copied} 个)`);
   });
   $("btn-restore")?.addEventListener("click", async () => {
     if (!window.confirm("把归档副本还原回 projects 目录,使 resume 重新可用?")) return;

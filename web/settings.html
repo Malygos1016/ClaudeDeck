@@ -1,4 +1,4 @@
-<!doctype html>
+﻿<!doctype html>
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
@@ -14,7 +14,7 @@
   <nav class="deck-nav" id="nav"></nav>
   <div class="header-spacer"></div>
   <div id="annunciator" class="annunciator" hidden></div>
-  <button id="rescan" class="ghost-btn" title="立即增量扫描并归档">重新扫描</button>
+  <button id="rescan" class="ghost-btn" title="立即增量扫描重建索引">重新扫描</button>
   <div class="scanbar" id="scanbar" hidden>
     <div class="scanbar-fill"></div>
     <span class="scanbar-label mono"></span>
@@ -28,7 +28,6 @@
       <div class="form-grid" id="cfg-form">
         <label>归档目录<input id="cf-archive_dir" class="mono"></label>
         <label>扫描间隔(秒)<input id="cf-scan_interval_seconds" type="number" min="10" class="mono"></label>
-        <label>归档安静期(分钟)<input id="cf-archive_quiet_minutes" type="number" min="0" class="mono"></label>
         <label>看板轮询(毫秒)<input id="cf-live_poll_ms" type="number" min="500" class="mono"></label>
         <label>端口<input id="cf-port" type="number" class="mono"></label>
         <label>claude.exe 路径<input id="cf-claude_exe" class="mono"></label>
@@ -39,6 +38,17 @@
         <span class="mono form-info" id="cfg-info"></span>
         <button id="save" class="ghost-btn primary">保存</button>
       </div>
+    </div>
+  </section>
+
+  <section class="board-sec">
+    <div class="sec-head"><h2 class="sec-title">归档策略</h2></div>
+    <div class="panel-card">
+      <span style="font-size:12.5px;color:var(--dim)">
+        归档 = <strong>手动封存</strong>:只有你在会话详情页点「封存」才会拷贝到归档区并标记已归档。
+        没有任何自动备份——未封存的会话在官方 30 天清理(cleanupPeriodDays)到期后会被
+        <strong>永久删除,无法找回</strong>。做完觉得值得留的事,记得封存。
+      </span>
     </div>
   </section>
 

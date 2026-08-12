@@ -160,7 +160,6 @@ class Indexer:
                 stats["files_skipped"] += 1
                 if not archived:
                     self._refresh_companion(mf)
-                    self._maybe_archive(mf, stats)
                 return
             if mf.size < (row["parsed_offset"] or 0):
                 fresh = True  # 文件被重写/截断 → 全量重扫
@@ -176,7 +175,6 @@ class Indexer:
         stats["bad_lines"] += chunk.bad_lines
         if not archived:
             self._refresh_companion(mf)
-            self._maybe_archive(mf, stats)
 
     def _apply_chunk(
         self,
@@ -396,35 +394,8 @@ class Indexer:
         )
 
     # ---------- 归档 ----------
-
-    def _maybe_archive(self, mf: MainFile, stats: dict) -> None:
-        try:
-            st = mf.path.stat()
-        except OSError:
-            return
-        if not archive_mod.is_quiet(st.st_mtime_ns, self.cfg.archive_quiet_minutes):
-            return
-        row = self.con.execute(
-            "SELECT archived_mtime_ns, archived_size FROM files WHERE path=?", (str(mf.path),)
-        ).fetchone()
-        if (
-            row is not None
-            and row["archived_mtime_ns"] == st.st_mtime_ns
-            and row["archived_size"] == st.st_size
-        ):
-            archive_mod.mirror_companion(self.cfg, mf)  # 伴生目录仍可能有新文件
-            return
-        archive_mod.snapshot_main(self.cfg, mf)
-        archive_mod.mirror_companion(self.cfg, mf)
-        stats["archived_copies"] += 1
-        self.con.execute(
-            "UPDATE files SET archived_mtime_ns=?, archived_size=? WHERE path=?",
-            (st.st_mtime_ns, st.st_size, str(mf.path)),
-        )
-        self.con.execute(
-            "UPDATE sessions SET archived_at=? WHERE session_id=?",
-            (now_iso(), mf.session_id),
-        )
+    # 归档 = 手动封存(用户拍板 2026-08-12):只有 force_archive 会产生新快照,
+    # 扫描循环绝不自动镜像。未封存的会话会被官方 cleanupPeriodDays(默认30天)清理。
 
     def _index_archive_only(self, live_sids: set[str], *, force: bool, stats: dict) -> set[str]:
         """源已被官方清理、仅存归档副本的会话:照常入索引,标记 source_missing。

@@ -3,12 +3,13 @@
 Claude Code 本地会话管理界面:找回对话、看清状态、在 30 天自动清理前留住数据。
 
 - **会话中心**:跨项目列表、中文全文搜索(SQLite FTS5 trigram,1-2 字短词自动回退 LIKE)、
-  聊天视图预览、一键 `--resume` 拉起、导出 Markdown、claude.ai 网页链接。
-- **状态看板**:轮询 `~/.claude/sessions/<PID>.json` 的运行中窗口 busy/idle 实时看板
-  (不依赖终端选项卡标题,重命名随意)、后台作业、磁盘占用、token 用量曲线。
-- **归档**:官方 `cleanupPeriodDays`(默认 30 天)不动;索引器每轮扫描把安静期
-  transcript 镜像到独立归档目录(`config.json` 的 `archive_dir`,可指向任意盘)。
-  已清理的会话仍可搜可看,并可一键还原回 `projects/` 重新 resume。
+  聊天视图预览、一键 `--resume` 拉起、导出 Markdown。
+- **状态看板**:轮询 `~/.claude/sessions/<PID>.json` 的运行中窗口 busy/waiting/idle
+  实时看板(不依赖终端选项卡标题,重命名随意)、后台作业、磁盘占用、token 用量曲线。
+- **归档 = 手动封存**:事情做完,在详情页点「封存」才会镜像到归档目录
+  (`config.json` 的 `archive_dir`,可指向任意盘),没有任何自动备份;官方
+  `cleanupPeriodDays`(默认 30 天)不动,未封存的会话到期即被官方永久清理。
+  封存过的会话被清理后仍可搜可看,并可一键还原回 `projects/` 重新 resume。
 
 数据真相源永远是 `~/.claude` 下的文件;SQLite(`data/claudedeck.db`)只是可随时重建的
 缓存索引;归档目录是唯一额外持久数据,程序只增不删。
@@ -28,7 +29,7 @@ busy/waiting/idle 实时灯、后台作业、用量双曲线、磁盘)、**详�
 命令行:
 
 ```
-.venv\Scripts\python.exe -m app.cli scan          # 全量/增量索引 + 归档快照
+.venv\Scripts\python.exe -m app.cli scan          # 全量/增量索引(不产生归档)
 .venv\Scripts\python.exe -m app.cli search 托卡马克
 .venv\Scripts\python.exe -m app.cli title <session_id>
 ```

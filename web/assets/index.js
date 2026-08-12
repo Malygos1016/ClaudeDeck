@@ -4,12 +4,27 @@ import { api, copyText, esc, fmtBytes, fmtTime, fullTime, initHeader, resumeSess
 const state = { q: "", project: "", archived: "all", sort: "last_ts", order: "desc", page: 1 };
 const $ = (id) => document.getElementById(id);
 
-// 固定四列插槽:状态 | 恢复 | 复制命令 | 网页。缺位用隐形占位,保证列列对齐。
-function statusSlot(s) {
-  if (s.running) return '<span class="badge running">运行中</span>';
-  if (s.source_missing) return '<span class="badge missing">源已清理</span>';
-  if (s.archived) return '<span class="badge archived">已归档</span>';
+// 固定四列插槽:归档列 | 运行列 | 恢复 | 复制命令。
+// 列职责单一(用户拍板):归档列只放归档态;运行列只放 运行中/已停止,悬浮显示已停止多久。
+function sealSlot(s) {
+  if (s.source_missing) return '<span class="badge missing" title="源 transcript 已被官方清理,仅存封存副本">源已清理</span>';
+  if (s.archived) return '<span class="badge archived" title="已手动封存到归档区">已归档</span>';
   return '<span class="slot-empty"></span>';
+}
+
+function stoppedFor(ts) {
+  const ms = Date.now() - new Date(ts).getTime();
+  if (!Number.isFinite(ms) || ms < 0) return "";
+  const m = Math.floor(ms / 60000);
+  if (m < 60) return `${m} 分钟`;
+  const h = Math.floor(m / 60);
+  if (h < 48) return `${h} 小时`;
+  return `${Math.floor(h / 24)} 天`;
+}
+
+function runSlot(s) {
+  if (s.running) return '<span class="badge running">运行中</span>';
+  return `<span class="badge stopped" title="已停止 ${esc(stoppedFor(s.last_ts))}">已停止</span>`;
 }
 
 function metaLine(s) {
@@ -32,10 +47,7 @@ function actionsHtml(s) {
       ? `<button class="ghost-btn primary" data-resume-sid="${esc(s.session_id)}" title="新开 Windows Terminal 标签 resume 此会话">恢复 ▶</button>`
       : '<span class="slot-empty"></span>';
   const copy = `<button class="ghost-btn" data-cmd-sid="${esc(s.session_id)}" title="复制在原目录 resume 的完整命令">复制命令</button>`;
-  const web = s.bridge_url
-    ? `<a class="ghost-btn" href="${esc(s.bridge_url)}" target="_blank" rel="noopener">网页 ↗</a>`
-    : '<span class="slot-empty"></span>';
-  return statusSlot(s) + resume + copy + web;
+  return sealSlot(s) + runSlot(s) + resume + copy;
 }
 
 function rowHtml(s, extra = "") {

@@ -57,7 +57,6 @@ function renderWindows(data) {
         </div>
         <div class="win-foot mono">
           pid ${esc(String(s.pid ?? "?"))} · ${esc(s.version || "")}
-          ${s.bridge_url ? ` · <a href="${esc(s.bridge_url)}" target="_blank" rel="noopener">网页 ↗</a>` : ""}
         </div>
       </div>`;
     })
