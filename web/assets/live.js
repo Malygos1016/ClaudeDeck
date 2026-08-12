@@ -1,5 +1,8 @@
 // 状态看板:运行中窗口(2s)/后台作业(10s)/用量曲线/磁盘/plans。
-import { api, copyText, esc, fmtBytes, fmtTime, fullTime, initHeader, poll } from "./common.js";
+import { api, copyText, esc, fmtBytes, fmtTime, fullTime, initHeader, poll, reveal } from "./common.js";
+
+let winRevealed = false;
+let jobsRevealed = false;
 import { lineChart } from "./chart.js";
 
 const $ = (id) => document.getElementById(id);
@@ -59,6 +62,7 @@ function renderWindows(data) {
       </div>`;
     })
     .join("");
+  if (!winRevealed) { reveal($("windows")); winRevealed = true; }
 }
 
 // ---------- 后台作业 ----------
@@ -86,6 +90,7 @@ function renderJobs(data) {
       </div>`;
     })
     .join("");
+  if (!jobsRevealed) { reveal($("jobs")); jobsRevealed = true; }
 }
 
 // ---------- 用量曲线 ----------

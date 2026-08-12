@@ -1,5 +1,5 @@
 // 会话列表 + 全文搜索页。
-import { api, copyText, esc, fmtBytes, fmtTime, fullTime, initHeader, resumeSession, toast } from "./common.js";
+import { api, copyText, esc, fmtBytes, fmtTime, fullTime, initHeader, resumeSession, reveal, toast } from "./common.js";
 
 const state = { q: "", project: "", archived: "all", sort: "last_ts", order: "desc", page: 1 };
 const $ = (id) => document.getElementById(id);
@@ -65,6 +65,7 @@ function renderList(res) {
     return;
   }
   $("results").innerHTML = res.items.map((s) => rowHtml(s)).join("");
+  reveal($("results"));
   renderPager(res.total);
 }
 
@@ -94,6 +95,7 @@ function renderSearch(res) {
       return `<div class="hit-group">${rowHtml(g.session, `<div class="hits">${hits}</div>`)}</div>`;
     })
     .join("");
+  reveal($("results"));
   $("pager").innerHTML = "";
 }
 

@@ -31,6 +31,21 @@ class CwdMissing(Exception):
         self.cwd = cwd
 
 
+# 若 ClaudeDeck 本身是从 Claude Code 的工具 shell 里启动的,这些变量会一路穿透到
+# 被拉起的新 claude:NO_COLOR 让它整屏白字,CLAUDECODE/CLAUDE_CODE_* 让它自认嵌套
+# 会话(2026-08-12 实测)。拉起前必须净化。
+_ENV_STRIP_EXACT = {"NO_COLOR", "FORCE_COLOR", "CLAUDECODE", "CLAUDE_PID", "GIT_TERMINAL_PROMPT"}
+_ENV_STRIP_PREFIX = ("CLAUDE_CODE_",)
+
+
+def _clean_child_env() -> dict[str, str]:
+    return {
+        k: v
+        for k, v in os.environ.items()
+        if k not in _ENV_STRIP_EXACT and not k.startswith(_ENV_STRIP_PREFIX)
+    }
+
+
 def build_resume_command(cfg: Config, cwd: str | None, session_id: str, fork: bool = False) -> str:
     """官方推荐形式:先 cd 再 resume,Windows 分隔符用 ';'(PowerShell)。"""
     exe = cfg.claude_exe
@@ -114,19 +129,21 @@ def launch_resume(
         inner += " --fork-session"
 
     title = f"resume {session_id[:8]}"
+    env = _clean_child_env()
     wt = shutil.which("wt.exe")
     if wt:
         args = [
             wt, "new-tab", "--title", title, "-d", effective_cwd,
             "powershell.exe", "-NoExit", "-Command", inner,
         ]
-        subprocess.Popen(args)
+        subprocess.Popen(args, env=env)
         used_wt = True
     else:
         subprocess.Popen(
             ["powershell.exe", "-NoExit", "-Command", inner],
             cwd=effective_cwd,
             creationflags=CREATE_NEW_CONSOLE,
+            env=env,
         )
         used_wt = False
 

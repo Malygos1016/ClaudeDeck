@@ -1,5 +1,5 @@
 // 会话详情:聊天视图 + 折叠 + 深链 + 子 agent 抽屉。
-import { api, copyText, esc, fmtBytes, fullTime, initHeader, resumeSession, toast } from "./common.js";
+import { api, copyText, esc, fmtBytes, fullTime, initHeader, resumeSession, reveal, toast } from "./common.js";
 
 const $ = (id) => document.getElementById(id);
 const params = new URLSearchParams(location.search);
@@ -95,6 +95,7 @@ function updateEdges(win, { prepend = false, append = false } = {}) {
 async function initialLoad() {
   const win = DEEP_SEQ != null ? await fetchWindow({ around_seq: DEEP_SEQ }) : await fetchWindow({});
   renderWindowInto($("msgs"), win);
+  reveal($("msgs"));
   updateEdges(win);
   if (DEEP_SEQ != null) {
     const target = nearestSeqEl(DEEP_SEQ);

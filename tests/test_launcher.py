@@ -82,10 +82,19 @@ def test_launch_resume_wt_args(cfg, tmp_path, monkeypatch):
     calls = []
     monkeypatch.setattr(launcher.subprocess, "Popen", lambda args, **kw: calls.append((args, kw)))
     monkeypatch.setattr(launcher.shutil, "which", lambda name: r"C:\fake\wt.exe")
+    # 模拟从 Claude Code 工具 shell 启动 ClaudeDeck 的污染环境
+    monkeypatch.setenv("NO_COLOR", "1")
+    monkeypatch.setenv("CLAUDECODE", "1")
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "parent-session")
+    monkeypatch.setenv("KEEP_ME", "yes")
     cwd = tmp_path / "projdir"
     cwd.mkdir()
 
     res = launch_resume(cfg, str(cwd), SID)
+    env = calls[0][1]["env"]
+    assert "NO_COLOR" not in env and "CLAUDECODE" not in env  # 白字/嵌套标记必须净化
+    assert not any(k.startswith("CLAUDE_CODE_") for k in env)
+    assert env["KEEP_ME"] == "yes"
     assert res["ok"] and res["used_wt"] and res["trust_prewritten"] is True
     args, _ = calls[0]
     assert args[0] == r"C:\fake\wt.exe"

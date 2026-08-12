@@ -1,5 +1,5 @@
 // 归档管理:归档区概况 + 源已清理会话的浏览/还原。
-import { api, esc, fmtBytes, fmtTime, fullTime, initHeader, toast } from "./common.js";
+import { api, esc, fmtBytes, fmtTime, fullTime, initHeader, reveal, toast } from "./common.js";
 
 const $ = (id) => document.getElementById(id);
 
@@ -42,6 +42,7 @@ async function loadMissing() {
     return;
   }
   $("missing-list").innerHTML = res.items.map(rowHtml).join("");
+  reveal($("missing-list"));
 }
 
 let pendingRestore = null;

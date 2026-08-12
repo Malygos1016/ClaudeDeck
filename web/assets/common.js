@@ -149,9 +149,69 @@ export function navHtml(active) {
     .join("");
 }
 
+const REDUCED_MOTION = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
+
+const _revealObserver =
+  !REDUCED_MOTION && "IntersectionObserver" in window
+    ? new IntersectionObserver(
+        (entries) => {
+          for (const e of entries) {
+            if (e.isIntersecting) {
+              e.target.classList.add("in");
+              _revealObserver.unobserve(e.target);
+            }
+          }
+        },
+        { rootMargin: "0px 0px -4% 0px" }
+      )
+    : null;
+
+// 容器子元素入场渐入(滚入视口才触发,批内 36ms 阶梯)。轮询重绘的区域只在首次调用。
+export function reveal(container) {
+  if (!_revealObserver || !container) return;
+  let i = 0;
+  for (const el of container.children) {
+    if (el.classList.contains("reveal")) continue;
+    el.classList.add("reveal");
+    el.style.transitionDelay = `${(i++ % 8) * 36}ms`;
+    _revealObserver.observe(el);
+  }
+}
+
+// 顶栏随滚轮隐现:下滚累计 90px 淡出,任意上滚立即淡回。
+function initScrollHide() {
+  if (REDUCED_MOTION) return;
+  const header = document.querySelector(".deck-header");
+  if (!header) return;
+  let last = window.scrollY;
+  let acc = 0;
+  window.addEventListener(
+    "scroll",
+    () => {
+      const y = window.scrollY;
+      const delta = y - last;
+      last = y;
+      if (y < 80) {
+        header.classList.remove("nav-hidden");
+        acc = 0;
+        return;
+      }
+      if (delta > 0) {
+        acc += delta;
+        if (acc > 90) header.classList.add("nav-hidden");
+      } else {
+        acc = 0;
+        header.classList.remove("nav-hidden");
+      }
+    },
+    { passive: true }
+  );
+}
+
 export function initHeader(active) {
   const nav = document.getElementById("nav");
   if (nav) nav.innerHTML = navHtml(active);
+  initScrollHide();
 
   const rescan = document.getElementById("rescan");
   if (rescan) {
