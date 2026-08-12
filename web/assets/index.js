@@ -4,12 +4,12 @@ import { api, copyText, esc, fmtBytes, fmtTime, fullTime, initHeader, resumeSess
 const state = { q: "", project: "", archived: "all", sort: "last_ts", order: "desc", page: 1 };
 const $ = (id) => document.getElementById(id);
 
-function badges(s) {
-  const out = [];
-  if (s.running) out.push('<span class="badge running">运行中</span>');
-  if (s.source_missing) out.push('<span class="badge missing">源已清理</span>');
-  else if (s.archived) out.push('<span class="badge archived">已归档</span>');
-  return out.join("");
+// 固定四列插槽:状态 | 恢复 | 复制命令 | 网页。缺位用隐形占位,保证列列对齐。
+function statusSlot(s) {
+  if (s.running) return '<span class="badge running">运行中</span>';
+  if (s.source_missing) return '<span class="badge missing">源已清理</span>';
+  if (s.archived) return '<span class="badge archived">已归档</span>';
+  return '<span class="slot-empty"></span>';
 }
 
 function metaLine(s) {
@@ -27,19 +27,15 @@ function metaLine(s) {
 }
 
 function actionsHtml(s) {
-  const out = [];
-  if (!s.source_missing && !s.running) {
-    out.push(
-      `<button class="ghost-btn primary" data-resume-sid="${esc(s.session_id)}" title="新开 Windows Terminal 标签 resume 此会话">恢复 ▶</button>`
-    );
-  }
-  out.push(
-    `<button class="ghost-btn" data-cmd-sid="${esc(s.session_id)}" title="复制在原目录 resume 的完整命令">复制命令</button>`
-  );
-  if (s.bridge_url) {
-    out.push(`<a class="ghost-btn" href="${esc(s.bridge_url)}" target="_blank" rel="noopener">网页 ↗</a>`);
-  }
-  return out.join("");
+  const resume =
+    !s.source_missing && !s.running
+      ? `<button class="ghost-btn primary" data-resume-sid="${esc(s.session_id)}" title="新开 Windows Terminal 标签 resume 此会话">恢复 ▶</button>`
+      : '<span class="slot-empty"></span>';
+  const copy = `<button class="ghost-btn" data-cmd-sid="${esc(s.session_id)}" title="复制在原目录 resume 的完整命令">复制命令</button>`;
+  const web = s.bridge_url
+    ? `<a class="ghost-btn" href="${esc(s.bridge_url)}" target="_blank" rel="noopener">网页 ↗</a>`
+    : '<span class="slot-empty"></span>';
+  return statusSlot(s) + resume + copy + web;
 }
 
 function rowHtml(s, extra = "") {
@@ -47,8 +43,7 @@ function rowHtml(s, extra = "") {
   <div class="session-row" data-sid="${esc(s.session_id)}">
     <div class="row-top">
       <a class="row-title" href="/session.html?sid=${esc(s.session_id)}" title="${esc(s.title || "")}">${esc(s.title || "(无标题)")}</a>
-      ${badges(s)}
-      <span class="row-actions">${actionsHtml(s)}</span>
+      <span class="row-actions acts-grid">${actionsHtml(s)}</span>
     </div>
     <div class="row-meta">${metaLine(s)}</div>
     ${extra}
