@@ -98,6 +98,7 @@ a:hover { text-decoration: underline; }
   padding: 2px 8px; background: var(--bg);
 }
 .ann-cell:hover { border-color: var(--amber); color: var(--text); text-decoration: none; }
+.ann-cell.bg { border-style: dashed; opacity: 0.75; }
 
 .lamp { width: 8px; height: 8px; border-radius: 50%; background: var(--ok); flex: none; }
 .lamp.busy { background: var(--amber); animation: lamp-breathe 1.6s ease-in-out infinite; }
@@ -200,6 +201,7 @@ a.row-title { color: var(--text); }
 .badge.missing { color: var(--bad); border-color: var(--bad); background: var(--bad-soft); }
 .badge.archived { color: var(--dim); }
 .badge.running { color: var(--amber); border-color: var(--amber); background: var(--amber-soft); }
+.badge.bg { color: #7fa8d0; border-color: rgba(63, 146, 212, 0.5); border-style: dashed; }
 
 /* ---------- 搜索结果组 ---------- */
 .hit-group { border-bottom: 1px solid var(--line-soft); }

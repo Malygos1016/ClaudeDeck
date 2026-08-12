@@ -48,7 +48,7 @@ function renderWindows(data) {
         <div class="win-top">
           <span class="lamp ${lampClass(s)}"></span>
           <span class="win-name mono">${esc(s.name || "?")}</span>
-          ${s.kind === "bg" ? '<span class="badge">后台</span>' : ""}
+          ${s.kind === "bg" ? '<span class="badge bg" title="daemon 驻留的后台会话,没有窗口;用 claude agents 管理或在后台作业区处理">后台驻留</span>' : ""}
           ${statusText(s)}
         </div>
         ${s.title ? `<div class="win-title" title="${esc(s.title)}">${esc(s.title)}</div>` : ""}

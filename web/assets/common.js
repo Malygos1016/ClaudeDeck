@@ -257,9 +257,11 @@ async function initAnnunciator() {
   const render = (data) => {
     const cells = (data.sessions || []).map((s) => {
       const lamp = s.status === "waiting" ? "waiting" : s.status === "busy" ? "busy" : "";
+      const bg = s.kind === "bg" ? " bg" : "";
       const name = esc(s.name || s.session_id?.slice(0, 8) || "?");
-      const title = esc(`${s.cwd || ""} · ${s.status === "waiting" ? "等待你" : s.status}`);
-      return `<span class="ann-cell" title="${title}"><span class="lamp ${lamp}"></span>${name}</span>`;
+      const state = s.status === "waiting" ? "等待你" : s.status;
+      const title = esc(`${s.cwd || ""} · ${state}${s.kind === "bg" ? " · 后台驻留(无窗口)" : ""}`);
+      return `<span class="ann-cell${bg}" title="${title}"><span class="lamp ${lamp}"></span>${name}</span>`;
     });
     el.innerHTML = cells.join("");
     el.hidden = cells.length === 0;
