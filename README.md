@@ -17,10 +17,15 @@ Claude Code 本地会话管理界面:找回对话、看清状态、在 30 天自
 
 ```
 install.bat            # uv venv + 依赖(仅项目内,不污染全局)
-start_claudedeck.bat   # 启动服务并打开 http://127.0.0.1:8737 (S2 起可用)
+start_claudedeck.bat   # 启动服务并打开 http://127.0.0.1:8737
 ```
 
-命令行(S1 起可用):
+五个页面:**会话**(列表/全文搜索/一键恢复/复制命令)、**看板**(运行中窗口
+busy/waiting/idle 实时灯、后台作业、用量双曲线、磁盘)、**详情**(聊天视图/深链/
+子 agent 抽屉/导出 MD)、**归档**(源已清理会话的浏览与还原)、**设置**(配置/重建
+索引/项目 purge)。顶栏通告牌灯条在每一页都亮着。
+
+命令行:
 
 ```
 .venv\Scripts\python.exe -m app.cli scan          # 全量/增量索引 + 归档快照
@@ -28,11 +33,14 @@ start_claudedeck.bat   # 启动服务并打开 http://127.0.0.1:8737 (S2 起可�
 .venv\Scripts\python.exe -m app.cli title <session_id>
 ```
 
-服务只绑 127.0.0.1,无外网面;破坏性操作(还原/purge)需确认,删除复用官方
-`claude project purge`,绝不自行 rm。
+安全边界:服务只绑 127.0.0.1;运行中的会话禁止 resume(CC 并发检测会让新实例
+直接退出);破坏性操作(还原/purge)需确认,purge 前强制归档并复用官方
+`claude project purge`,绝不自行 rm;本工具唯一会写的用户数据是 resume 前对
+`~/.claude.json` 单键的信任预写(自动备份到 `~/.claude/backups/`)。
 
 ## 环境
 
 Windows 11 / Python 3.14(uv 管理)/ Claude Code 2.1.22x 的数据布局
-(`ai-title` 控制行、`sessions/<PID>.json` 注册表、`cse_↔session_` 网页映射等,
-详见 `IMPLEMENTATION_PLAN.md` 引用的计划文件附录)。
+(`ai-title` 控制行、`sessions/<PID>.json` 注册表含 busy/idle/waiting 三态、
+`cse_↔session_` 网页映射、FILETIME procStart 验活等,数据事实附录见
+`~/.claude/plans/ultrathink-claudecode-glittery-minsky.md`)。
