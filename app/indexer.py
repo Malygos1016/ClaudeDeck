@@ -136,6 +136,14 @@ class Indexer:
             self.con.commit()
             return {"archived_path": str(dest), "companion_copied": copied}
 
+    def rebuild(self) -> None:
+        """删库重建(schema 级)。持锁进行,期间无扫描;调用方随后应触发全量扫描。"""
+        from . import db as db_mod
+
+        with self.lock:
+            self.con.close()
+            self.con = db_mod.rebuild(self.cfg.db_path)
+
     # ---------- 主 transcript ----------
 
     def _find_live_main(self, session_id: str) -> MainFile | None:

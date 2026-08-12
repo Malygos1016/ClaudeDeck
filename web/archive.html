@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ClaudeDeck · 归档</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ccircle cx='8' cy='8' r='5' fill='%23e2a13c'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="/assets/app.css">
+</head>
+<body data-page="archive">
+
+<header class="deck-header">
+  <a class="wordmark" href="/">Claude<b>Deck</b></a>
+  <nav class="deck-nav" id="nav"></nav>
+  <div class="header-spacer"></div>
+  <div id="annunciator" class="annunciator" hidden></div>
+  <button id="rescan" class="ghost-btn" title="立即增量扫描并归档">重新扫描</button>
+  <div class="scanbar" id="scanbar" hidden>
+    <div class="scanbar-fill"></div>
+    <span class="scanbar-label mono"></span>
+  </div>
+</header>
+
+<main class="wrap">
+  <section class="board-sec">
+    <div class="sec-head"><h2 class="sec-title">归档区</h2></div>
+    <div class="panel-card" id="arc-info">加载中…</div>
+    <div class="notice" style="margin-top:10px">
+      官方 <span class="mono">cleanupPeriodDays</span> 默认 30 天:超期 transcript 会在 Claude Code
+      启动时被静默删除。ClaudeDeck 每轮扫描把安静期(15 分钟无写入)的会话镜像到归档区兜底——
+      被清理后仍可搜可看,还原回 <span class="mono">projects\</span> 即可重新 resume。
+    </div>
+  </section>
+
+  <section class="board-sec">
+    <div class="sec-head">
+      <h2 class="sec-title">源已清理·可还原</h2>
+      <span class="result-count" id="missing-count"></span>
+    </div>
+    <div class="results" id="missing-list"><div class="empty">加载中…</div></div>
+  </section>
+</main>
+
+<div id="toast" class="toast" hidden></div>
+<script type="module" src="/assets/archive.js"></script>
+</body>
+</html>

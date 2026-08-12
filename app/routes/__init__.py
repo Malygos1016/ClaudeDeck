@@ -21,10 +21,11 @@ def request_db(request: Request) -> Iterator[sqlite3.Connection]:
 
 
 def build_api_router() -> APIRouter:
-    from . import indexctl, liveboard, sessions
+    from . import actions, indexctl, liveboard, sessions
 
     router = APIRouter()
     router.include_router(sessions.router)
     router.include_router(indexctl.router)
     router.include_router(liveboard.router)
+    router.include_router(actions.router)
     return router

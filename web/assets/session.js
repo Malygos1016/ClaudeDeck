@@ -1,5 +1,5 @@
 // 会话详情:聊天视图 + 折叠 + 深链 + 子 agent 抽屉。
-import { api, copyText, esc, fmtBytes, fullTime, initHeader, toast } from "./common.js";
+import { api, copyText, esc, fmtBytes, fullTime, initHeader, resumeSession, toast } from "./common.js";
 
 const $ = (id) => document.getElementById(id);
 const params = new URLSearchParams(location.search);
@@ -148,10 +148,20 @@ function renderHeader(det) {
   $("s-title").textContent = s.title || "(无标题)";
   $("s-badges").innerHTML = headerBadges(s);
 
-  const actions = [
+  const actions = [];
+  if (s.running) {
+    actions.push('<span class="badge running">运行中·去那个窗口继续</span>');
+    actions.push(`<button class="ghost-btn" id="btn-archive" title="无视安静期立即镜像到归档区">立即归档</button>`);
+  } else if (!s.source_missing) {
+    actions.push(`<button class="ghost-btn primary" id="btn-resume">恢复 ▶</button>`);
+    actions.push(`<button class="ghost-btn" id="btn-archive" title="无视安静期立即镜像到归档区">立即归档</button>`);
+  } else if (s.archived) {
+    actions.push(`<button class="ghost-btn primary" id="btn-restore">还原到 projects</button>`);
+  }
+  actions.push(
     `<button class="ghost-btn" id="btn-cmd">复制命令</button>`,
-    `<a class="ghost-btn" href="/api/sessions/${esc(SID)}/export" title="导出 Markdown">导出 MD</a>`,
-  ];
+    `<a class="ghost-btn" href="/api/sessions/${esc(SID)}/export" title="导出 Markdown">导出 MD</a>`
+  );
   if (s.bridge_url) actions.push(`<a class="ghost-btn" href="${esc(s.bridge_url)}" target="_blank" rel="noopener">网页 ↗</a>`);
   actions.push(
     `<label class="ghost-btn sys-toggle"><input type="checkbox" id="sys-toggle"> 系统事件</label>`
@@ -161,6 +171,21 @@ function renderHeader(det) {
     const res = await api(`/api/sessions/${SID}/command`);
     await copyText(res.command, "resume 命令已复制");
     if (res.note) setTimeout(() => toast(res.note, 4000), 900);
+  });
+  $("btn-resume")?.addEventListener("click", (e) => {
+    e.target.disabled = true;
+    resumeSession(SID).finally(() => { e.target.disabled = false; });
+  });
+  $("btn-archive")?.addEventListener("click", async () => {
+    const res = await api(`/api/sessions/${SID}/archive`, { json: {} });
+    toast(`已归档(伴生文件 ${res.companion_copied} 个)`);
+  });
+  $("btn-restore")?.addEventListener("click", async () => {
+    if (!window.confirm("把归档副本还原回 projects 目录,使 resume 重新可用?")) return;
+    const res = await api(`/api/sessions/${SID}/restore`, { json: { confirm: true } });
+    toast("已还原");
+    setTimeout(() => toast(res.note, 6000), 1200);
+    setTimeout(() => location.reload(), 2200);
   });
   $("sys-toggle").addEventListener("change", async (e) => {
     state.showSystem = e.target.checked;

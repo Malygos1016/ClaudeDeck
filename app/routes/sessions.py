@@ -136,7 +136,9 @@ def session_detail(
         p = cfg.claude_home_path / "plans" / f"{row['slug']}.md"
         if p.is_file():
             plan = {"slug": row["slug"], "path": str(p)}
-    return {"session": _session_out(row), "subagents": subagents, "plan": plan}
+    out = _session_out(row)
+    out["running"] = out["session_id"] in _running_sids(request)
+    return {"session": out, "subagents": subagents, "plan": plan}
 
 
 def _session_row(con: sqlite3.Connection, sid: str) -> sqlite3.Row:

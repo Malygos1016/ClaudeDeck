@@ -24,6 +24,7 @@ def cfg(tmp_path: Path) -> Config:
         archive_dir=str(tmp_path / "archive"),
         data_dir=str(tmp_path / "data"),
         archive_quiet_minutes=15,
+        config_path=str(tmp_path / "config.json"),
     )
 
 

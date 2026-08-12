@@ -144,10 +144,19 @@ def _init_schema(con: sqlite3.Connection) -> None:
 
 
 def _remove_db_files(db_path: Path) -> None:
+    import time
+
     for suffix in ("", "-wal", "-shm"):
         p = Path(str(db_path) + suffix)
-        if p.exists():
-            p.unlink()
+        for attempt in range(3):  # Windows 上短命读连接可能瞬时占着文件
+            try:
+                if p.exists():
+                    p.unlink()
+                break
+            except PermissionError:
+                if attempt == 2:
+                    raise
+                time.sleep(0.2)
 
 
 def rebuild(db_path: Path) -> sqlite3.Connection:

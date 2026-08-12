@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ClaudeDeck · 设置</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ccircle cx='8' cy='8' r='5' fill='%23e2a13c'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="/assets/app.css">
+</head>
+<body data-page="settings">
+
+<header class="deck-header">
+  <a class="wordmark" href="/">Claude<b>Deck</b></a>
+  <nav class="deck-nav" id="nav"></nav>
+  <div class="header-spacer"></div>
+  <div id="annunciator" class="annunciator" hidden></div>
+  <button id="rescan" class="ghost-btn" title="立即增量扫描并归档">重新扫描</button>
+  <div class="scanbar" id="scanbar" hidden>
+    <div class="scanbar-fill"></div>
+    <span class="scanbar-label mono"></span>
+  </div>
+</header>
+
+<main class="wrap settings-wrap">
+  <section class="board-sec">
+    <div class="sec-head"><h2 class="sec-title">配置(config.json)</h2></div>
+    <div class="panel-card">
+      <div class="form-grid" id="cfg-form">
+        <label>归档目录<input id="cf-archive_dir" class="mono"></label>
+        <label>扫描间隔(秒)<input id="cf-scan_interval_seconds" type="number" min="10" class="mono"></label>
+        <label>归档安静期(分钟)<input id="cf-archive_quiet_minutes" type="number" min="0" class="mono"></label>
+        <label>看板轮询(毫秒)<input id="cf-live_poll_ms" type="number" min="500" class="mono"></label>
+        <label>端口<input id="cf-port" type="number" class="mono"></label>
+        <label>claude.exe 路径<input id="cf-claude_exe" class="mono"></label>
+        <label class="check"><input id="cf-index_thinking" type="checkbox"> 索引 thinking 文本(需重建索引)</label>
+        <label class="check"><input id="cf-index_tool_results" type="checkbox"> 索引工具输出(索引体积大增,需重建)</label>
+      </div>
+      <div class="form-foot">
+        <span class="mono form-info" id="cfg-info"></span>
+        <button id="save" class="ghost-btn primary">保存</button>
+      </div>
+    </div>
+  </section>
+
+  <section class="board-sec">
+    <div class="sec-head"><h2 class="sec-title">索引维护</h2></div>
+    <div class="panel-card form-foot">
+      <span style="font-size:12.5px;color:var(--dim)">
+        索引是纯缓存(<span class="mono" id="db-path"></span>),重建会清空后台全量重扫,不动任何源数据与归档。
+      </span>
+      <button id="rebuild" class="ghost-btn">重建索引</button>
+    </div>
+  </section>
+
+  <section class="board-sec">
+    <div class="sec-head"><h2 class="sec-title">危险区 · 项目清除</h2></div>
+    <div class="panel-card">
+      <div class="notice" style="margin-bottom:10px">
+        调用官方 <span class="mono">claude project purge --yes</span>:删除该项目全部
+        transcript、tasks、file-history、history 记录与项目条目。执行前 ClaudeDeck
+        会<strong>强制归档该项目全部会话</strong>,任何一个归档失败都会中止。
+      </div>
+      <div class="form-foot" style="flex-wrap:wrap;gap:10px">
+        <select id="purge-project" class="mono" style="min-width:280px"></select>
+        <input id="purge-confirm" class="mono" placeholder="输入项目目录名确认">
+        <button id="purge" class="ghost-btn">执行 purge</button>
+      </div>
+      <pre id="purge-out" class="mono" style="display:none;margin-top:10px;max-height:260px;overflow:auto;font-size:11.5px;background:var(--bg);border:1px solid var(--line-soft);border-radius:6px;padding:8px"></pre>
+    </div>
+  </section>
+</main>
+
+<div id="toast" class="toast" hidden></div>
+<script type="module" src="/assets/settings.js"></script>
+</body>
+</html>

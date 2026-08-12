@@ -7,14 +7,71 @@ export function esc(s) {
 }
 
 export async function api(path, opts = {}) {
-  const r = await fetch(path, { headers: { Accept: "application/json" }, ...opts });
+  const init = { headers: { Accept: "application/json" }, ...opts };
+  if (opts.json !== undefined) {
+    init.method = opts.method || "POST";
+    init.headers["Content-Type"] = "application/json";
+    init.body = JSON.stringify(opts.json);
+  }
+  const r = await fetch(path, init);
   if (!r.ok) {
-    let msg = r.statusText;
-    try { msg = (await r.json()).detail || msg; } catch { /* 保留 statusText */ }
+    let detail = r.statusText;
+    try { detail = (await r.json()).detail ?? detail; } catch { /* 保留 statusText */ }
+    const msg = typeof detail === "string" ? detail : detail.message || JSON.stringify(detail);
     if (!opts.silent) toast(`请求失败:${msg}`);
-    throw new Error(msg);
+    const err = new Error(msg);
+    err.detail = detail;
+    err.status = r.status;
+    throw err;
   }
   return r.json();
+}
+
+// 一键恢复:cwd 缺失时确认后降级到用户主目录打开。
+export async function resumeSession(sid, { fork = false } = {}) {
+  try {
+    const res = await api(`/api/sessions/${sid}/resume`, { json: { fork }, silent: true });
+    toast(`已拉起新窗口(${res.used_wt ? "WT 标签" : "独立控制台"})`);
+    setTimeout(() => toast(res.note, 5000), 1200);
+    return res;
+  } catch (e) {
+    if (e.detail?.code === "cwd_missing") {
+      const go = window.confirm(`${e.detail.message}\n\n目录: ${e.detail.cwd}\n\n改在用户主目录打开?`);
+      if (go) {
+        const res = await api(`/api/sessions/${sid}/resume`, { json: { fork, use_home_fallback: true } });
+        toast("已在用户主目录拉起(跨目录 resume)");
+        setTimeout(() => toast(res.note, 5000), 1200);
+        return res;
+      }
+      return null;
+    }
+    toast(`恢复失败:${e.message}`, 4000);
+    throw e;
+  }
+}
+
+// 危险按钮两段式确认:第一次点击进入武装态,3 秒内再点才执行。
+export function armConfirm(btn, armedLabel, fn) {
+  let armed = false, timer = null;
+  const original = btn.textContent;
+  btn.addEventListener("click", async () => {
+    if (!armed) {
+      armed = true;
+      btn.classList.add("danger-armed");
+      btn.textContent = armedLabel;
+      timer = setTimeout(() => {
+        armed = false;
+        btn.classList.remove("danger-armed");
+        btn.textContent = original;
+      }, 3000);
+      return;
+    }
+    clearTimeout(timer);
+    armed = false;
+    btn.classList.remove("danger-armed");
+    btn.textContent = original;
+    await fn();
+  });
 }
 
 let toastTimer = null;
@@ -84,8 +141,9 @@ export function navHtml(active) {
   const items = [
     ["/", "会话", "index"],
     ["/live.html", "看板", "live"],
+    ["/archive.html", "归档", "archive"],
+    ["/settings.html", "设置", "settings"],
   ];
-  // 后续阶段就位后加入:["/archive.html","归档","archive"],["/settings.html","设置","settings"]
   return items
     .map(([href, label, key]) => `<a href="${href}" class="${key === active ? "active" : ""}">${label}</a>`)
     .join("");

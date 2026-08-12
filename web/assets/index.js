@@ -1,5 +1,5 @@
 // 会话列表 + 全文搜索页。
-import { api, copyText, esc, fmtBytes, fmtTime, fullTime, initHeader, toast } from "./common.js";
+import { api, copyText, esc, fmtBytes, fmtTime, fullTime, initHeader, resumeSession, toast } from "./common.js";
 
 const state = { q: "", project: "", archived: "all", sort: "last_ts", order: "desc", page: 1 };
 const $ = (id) => document.getElementById(id);
@@ -27,9 +27,15 @@ function metaLine(s) {
 }
 
 function actionsHtml(s) {
-  const out = [
-    `<button class="ghost-btn" data-cmd-sid="${esc(s.session_id)}" title="复制在原目录 resume 的完整命令">复制命令</button>`,
-  ];
+  const out = [];
+  if (!s.source_missing && !s.running) {
+    out.push(
+      `<button class="ghost-btn primary" data-resume-sid="${esc(s.session_id)}" title="新开 Windows Terminal 标签 resume 此会话">恢复 ▶</button>`
+    );
+  }
+  out.push(
+    `<button class="ghost-btn" data-cmd-sid="${esc(s.session_id)}" title="复制在原目录 resume 的完整命令">复制命令</button>`
+  );
   if (s.bridge_url) {
     out.push(`<a class="ghost-btn" href="${esc(s.bridge_url)}" target="_blank" rel="noopener">网页 ↗</a>`);
   }
@@ -163,6 +169,12 @@ function bind() {
   document.addEventListener("click", async (e) => {
     const copyEl = e.target.closest("[data-copy]");
     if (copyEl) { copyText(copyEl.dataset.copy, "session id 已复制"); return; }
+    const resumeEl = e.target.closest("[data-resume-sid]");
+    if (resumeEl) {
+      resumeEl.disabled = true;
+      try { await resumeSession(resumeEl.dataset.resumeSid); } finally { resumeEl.disabled = false; }
+      return;
+    }
     const cmdEl = e.target.closest("[data-cmd-sid]");
     if (cmdEl) {
       const res = await api(`/api/sessions/${cmdEl.dataset.cmdSid}/command`);

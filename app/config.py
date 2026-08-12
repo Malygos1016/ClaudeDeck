@@ -30,6 +30,8 @@ class Config:
     claude_exe: str = field(default_factory=_default_claude_exe)
     index_thinking: bool = False
     index_tool_results: bool = False
+    # 本配置文件自身的位置(save 写回处;测试用临时路径隔离,不污染真实 config.json)
+    config_path: str = field(default_factory=lambda: str(DEFAULT_CONFIG_PATH))
 
     @property
     def claude_home_path(self) -> Path:
@@ -56,19 +58,22 @@ class Config:
         p = Path(path) if path else DEFAULT_CONFIG_PATH
         if p.exists():
             data = json.loads(p.read_text(encoding="utf-8"))
-            known = {f.name for f in dataclasses.fields(cls)}
+            known = {f.name for f in dataclasses.fields(cls)} - {"config_path"}
             cfg = cls(**{k: v for k, v in data.items() if k in known})
+            cfg.config_path = str(p)
         else:
-            cfg = cls()
-            cfg.save(p)
+            cfg = cls(config_path=str(p))
+            cfg.save()
         return cfg
 
     def save(self, path: str | Path | None = None) -> None:
-        p = Path(path) if path else DEFAULT_CONFIG_PATH
+        p = Path(path) if path else Path(self.config_path)
         p.parent.mkdir(parents=True, exist_ok=True)
+        data = dataclasses.asdict(self)
+        data.pop("config_path", None)  # 不把自身位置写进内容
         tmp = p.with_name(p.name + ".tmp")
         tmp.write_text(
-            json.dumps(dataclasses.asdict(self), ensure_ascii=False, indent=2) + "\n",
+            json.dumps(data, ensure_ascii=False, indent=2) + "\n",
             encoding="utf-8",
         )
         os.replace(tmp, p)
