@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ClaudeDeck · 会话</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ccircle cx='8' cy='8' r='5' fill='%23e2a13c'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="/assets/app.css">
+</head>
+<body data-page="index">
+
+<header class="deck-header">
+  <a class="wordmark" href="/">Claude<b>Deck</b></a>
+  <nav class="deck-nav" id="nav"></nav>
+  <div class="header-spacer"></div>
+  <div id="annunciator" class="annunciator" hidden></div>
+  <button id="rescan" class="ghost-btn" title="立即增量扫描并归档">重新扫描</button>
+  <div class="scanbar" id="scanbar" hidden>
+    <div class="scanbar-fill"></div>
+    <span class="scanbar-label mono"></span>
+  </div>
+</header>
+
+<main class="wrap">
+  <section class="searchbox">
+    <input id="q" class="search-input mono" type="search" autofocus
+           placeholder="搜索全部会话正文与标题…回车执行;1-2 字自动转模糊匹配">
+    <div class="filters">
+      <select id="f-project" title="按项目筛选"><option value="">全部项目</option></select>
+      <select id="f-archived" title="按来源状态筛选">
+        <option value="all">全部会话</option>
+        <option value="live">源仍在</option>
+        <option value="missing">源已清理</option>
+      </select>
+      <select id="f-sort" title="排序">
+        <option value="last_ts:desc">最近活跃</option>
+        <option value="first_ts:desc">最近创建</option>
+        <option value="file_size:desc">体积最大</option>
+        <option value="msg_count:desc">消息最多</option>
+      </select>
+      <span class="result-count" id="count"></span>
+    </div>
+  </section>
+
+  <div id="notice" class="notice" hidden></div>
+  <section id="results" class="results"><div class="empty">加载中…</div></section>
+  <footer class="pager" id="pager"></footer>
+</main>
+
+<div id="toast" class="toast" hidden></div>
+<script type="module" src="/assets/index.js"></script>
+</body>
+</html>
