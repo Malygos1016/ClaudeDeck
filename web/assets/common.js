@@ -81,8 +81,11 @@ export async function copyText(s, doneMsg = "已复制") {
 }
 
 export function navHtml(active) {
-  const items = [["/", "会话", "index"]];
-  // 后续阶段就位后加入:["/live.html","看板","live"],["/archive.html","归档","archive"],["/settings.html","设置","settings"]
+  const items = [
+    ["/", "会话", "index"],
+    ["/live.html", "看板", "live"],
+  ];
+  // 后续阶段就位后加入:["/archive.html","归档","archive"],["/settings.html","设置","settings"]
   return items
     .map(([href, label, key]) => `<a href="${href}" class="${key === active ? "active" : ""}">${label}</a>`)
     .join("");
@@ -135,9 +138,9 @@ async function initAnnunciator() {
 
   const render = (data) => {
     const cells = (data.sessions || []).map((s) => {
-      const lamp = s.status === "busy" ? "busy" : "";
+      const lamp = s.status === "waiting" ? "waiting" : s.status === "busy" ? "busy" : "";
       const name = esc(s.name || s.session_id?.slice(0, 8) || "?");
-      const title = esc(`${s.cwd || ""} · ${s.status}`);
+      const title = esc(`${s.cwd || ""} · ${s.status === "waiting" ? "等待你" : s.status}`);
       return `<span class="ann-cell" title="${title}"><span class="lamp ${lamp}"></span>${name}</span>`;
     });
     el.innerHTML = cells.join("");

@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ClaudeDeck · 看板</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ccircle cx='8' cy='8' r='5' fill='%23e2a13c'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="/assets/app.css">
+</head>
+<body data-page="live">
+
+<header class="deck-header">
+  <a class="wordmark" href="/">Claude<b>Deck</b></a>
+  <nav class="deck-nav" id="nav"></nav>
+  <div class="header-spacer"></div>
+  <div id="annunciator" class="annunciator" hidden></div>
+  <button id="rescan" class="ghost-btn" title="立即增量扫描并归档">重新扫描</button>
+  <div class="scanbar" id="scanbar" hidden>
+    <div class="scanbar-fill"></div>
+    <span class="scanbar-label mono"></span>
+  </div>
+</header>
+
+<main class="wrap">
+
+  <section class="board-sec">
+    <div class="sec-head">
+      <h2 class="sec-title">运行中窗口</h2>
+      <span id="degraded" class="badge missing" hidden title="procStart 换算在本机全部失配,已降级为进程存在+状态新鲜度判活">验活降级</span>
+      <label class="mono stale-toggle">
+        <input type="checkbox" id="show-stale"> 显示失效条目(<span id="stale-count">0</span>)
+      </label>
+    </div>
+    <div id="windows" class="win-grid"><div class="empty">读取会话注册表…</div></div>
+  </section>
+
+  <section class="board-sec">
+    <div class="sec-head"><h2 class="sec-title">后台作业</h2></div>
+    <div id="jobs"><div class="empty">无后台作业</div></div>
+  </section>
+
+  <section class="board-sec">
+    <div class="sec-head">
+      <h2 class="sec-title">用量曲线</h2>
+      <select id="days" class="mono">
+        <option value="7">近 7 天</option>
+        <option value="30" selected>近 30 天</option>
+        <option value="90">近 90 天</option>
+      </select>
+    </div>
+    <div class="charts-row">
+      <div class="chart-card">
+        <div class="chart-head mono">输出 tokens / 日
+          <button class="ghost-btn chart-toggle" data-chart="tokens">表格</button>
+        </div>
+        <div class="chart-body">
+          <canvas id="c-tokens"></canvas>
+          <div class="chart-tip mono" id="tip-tokens" hidden></div>
+          <div class="chart-table mono" id="tbl-tokens" hidden></div>
+        </div>
+      </div>
+      <div class="chart-card">
+        <div class="chart-head mono">成本 USD / 日 <span class="chart-src">statusline 口径</span>
+          <button class="ghost-btn chart-toggle" data-chart="cost">表格</button>
+        </div>
+        <div class="chart-body">
+          <canvas id="c-cost"></canvas>
+          <div class="chart-tip mono" id="tip-cost" hidden></div>
+          <div class="chart-table mono" id="tbl-cost" hidden></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="board-sec">
+    <div class="sec-head"><h2 class="sec-title">磁盘占用</h2><span class="mono chart-src" id="disk-total"></span></div>
+    <div class="disk-grid">
+      <div class="panel-card">
+        <div class="panel-title mono">~/.claude 分目录</div>
+        <div id="disk-dirs"></div>
+      </div>
+      <div class="panel-card">
+        <div class="panel-title mono">按项目(仅源仍在)</div>
+        <div id="disk-projects"></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="board-sec">
+    <div class="sec-head"><h2 class="sec-title">计划文件</h2></div>
+    <div id="plans" class="panel-card"></div>
+  </section>
+
+</main>
+
+<div id="toast" class="toast" hidden></div>
+<script type="module" src="/assets/live.js"></script>
+</body>
+</html>

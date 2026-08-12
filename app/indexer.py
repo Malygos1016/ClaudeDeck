@@ -1,4 +1,4 @@
-"""索引编排:扫描 → 解析 → 写库 → 归档快照。
+﻿"""索引编排:扫描 → 解析 → 写库 → 归档快照。
 
 索引线程是数据库唯一常态写入者;scan_once 由锁串行化(定时循环与手动触发并发安全)。
 数据真相源永远是 ~/.claude 下的文件,本库只是缓存;归档目录是唯一额外持久数据。
@@ -31,7 +31,7 @@ def now_iso() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
 
 
-def _ms_to_iso(ms: int) -> str:
+def ms_to_iso(ms: int) -> str:
     return (
         datetime.fromtimestamp(ms / 1000, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3]
         + "Z"
@@ -186,6 +186,7 @@ class Indexer:
 
         if fresh:
             self._delete_session_messages(sid)
+            self.con.execute("DELETE FROM usage_daily WHERE session_id=?", (sid,))
 
         # 正文行入库 + FTS
         cur = self.con.cursor()
@@ -228,6 +229,19 @@ class Indexer:
             "updated_at": now_iso(),
         }
         self._upsert_session(merged)
+
+        # 按日 usage(续读为增量累加;全量重扫上面已清零)
+        for day, v in chunk.usage_daily.items():
+            self.con.execute(
+                "INSERT INTO usage_daily(session_id, date, in_tokens, out_tokens,"
+                " cache_read_tokens, cache_write_tokens) VALUES(?,?,?,?,?,?) "
+                "ON CONFLICT(session_id, date) DO UPDATE SET"
+                " in_tokens=in_tokens+excluded.in_tokens,"
+                " out_tokens=out_tokens+excluded.out_tokens,"
+                " cache_read_tokens=cache_read_tokens+excluded.cache_read_tokens,"
+                " cache_write_tokens=cache_write_tokens+excluded.cache_write_tokens",
+                (sid, day, v[0], v[1], v[2], v[3]),
+            )
 
         # 标题与末次输入进 FTS(kind 唯一,upsert)
         if title_source == "ai-title" and title:
@@ -527,10 +541,10 @@ class Indexer:
                 "cwd": a["project"] or (old["cwd"] if old else None),
                 "title": (last_display or (old["title"] if old else None) or "")[:80] or None,
                 "title_source": "history",
-                "first_ts": _ms_to_iso(a["first_ms"])
+                "first_ts": ms_to_iso(a["first_ms"])
                 if a["first_ms"] is not None
                 else (old["first_ts"] if old else None),
-                "last_ts": _ms_to_iso(a["last_ms"])
+                "last_ts": ms_to_iso(a["last_ms"])
                 if a["last_ms"] is not None
                 else (old["last_ts"] if old else None),
                 "msg_count": len(a["prompts"]) + (old["msg_count"] if old else 0),
@@ -542,7 +556,7 @@ class Indexer:
                 cur = self.con.execute(
                     "INSERT INTO messages(session_id, uuid, seq, byte_offset, ts, kind, text) "
                     "VALUES(?, NULL, -3, NULL, ?, 'history_prompt', ?)",
-                    (sid, _ms_to_iso(ts_ms) if ts_ms is not None else None, display),
+                    (sid, ms_to_iso(ts_ms) if ts_ms is not None else None, display),
                 )
                 self.con.execute(
                     "INSERT INTO messages_fts(rowid, text) VALUES(?, ?)",

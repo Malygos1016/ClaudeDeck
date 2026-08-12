@@ -7,6 +7,7 @@ import sqlite3
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 from ..launcher import build_resume_command
+from ..live import read_live_sessions
 from ..search import MARK_L, MARK_R, search as do_search
 from ..transcript import bridge_url
 from . import request_db
@@ -35,6 +36,7 @@ def _session_out(row: sqlite3.Row) -> dict:
 
 @router.get("/sessions")
 def list_sessions(
+    request: Request,
     q: str | None = None,
     project: str | None = None,
     archived: str = Query("all", pattern="^(all|live|missing)$"),
@@ -70,7 +72,21 @@ def list_sessions(
         "LIMIT ? OFFSET ?",
         params + [page_size, (page - 1) * page_size],
     ).fetchall()
-    return {"total": total, "page": page, "page_size": page_size, "items": [_session_out(r) for r in rows]}
+    running = _running_sids(request)
+    items = []
+    for r in rows:
+        d = _session_out(r)
+        d["running"] = d["session_id"] in running
+        items.append(d)
+    return {"total": total, "page": page, "page_size": page_size, "items": items}
+
+
+def _running_sids(request: Request) -> set[str]:
+    try:
+        data = read_live_sessions(request.app.state.cfg)
+        return {(s.get("session_id") or "").lower() for s in data["sessions"]}
+    except Exception:
+        return set()
 
 
 @router.get("/projects")

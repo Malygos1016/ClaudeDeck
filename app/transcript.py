@@ -63,6 +63,8 @@ class ChunkResult:
     out_tokens: int = 0
     cache_read_tokens: int = 0
     cache_write_tokens: int = 0
+    # 按日 usage(键=YYYY-MM-DD,值=[in, out, cache_read, cache_write]),供用量曲线
+    usage_daily: dict[str, list[int]] = field(default_factory=dict)
 
 
 def clean_user_title(text: str, limit: int = 80) -> str:
@@ -235,10 +237,21 @@ def _handle_message_line(
                 )
         usage = msg.get("usage")
         if isinstance(usage, dict):
-            res.in_tokens += _as_int(usage.get("input_tokens"))
-            res.out_tokens += _as_int(usage.get("output_tokens"))
-            res.cache_read_tokens += _as_int(usage.get("cache_read_input_tokens"))
-            res.cache_write_tokens += _as_int(usage.get("cache_creation_input_tokens"))
+            vals = (
+                _as_int(usage.get("input_tokens")),
+                _as_int(usage.get("output_tokens")),
+                _as_int(usage.get("cache_read_input_tokens")),
+                _as_int(usage.get("cache_creation_input_tokens")),
+            )
+            res.in_tokens += vals[0]
+            res.out_tokens += vals[1]
+            res.cache_read_tokens += vals[2]
+            res.cache_write_tokens += vals[3]
+            ts = d.get("timestamp")
+            if isinstance(ts, str) and len(ts) >= 10:
+                day = res.usage_daily.setdefault(ts[:10], [0, 0, 0, 0])
+                for i in range(4):
+                    day[i] += vals[i]
 
     elif mtype == "system":
         if d.get("subtype") == "compact_boundary":

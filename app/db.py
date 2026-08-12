@@ -4,7 +4,7 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
-SCHEMA_VERSION = "1"
+SCHEMA_VERSION = "2"
 
 DDL = """
 CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT);
@@ -69,6 +69,16 @@ CREATE TABLE IF NOT EXISTS files (
   archived_mtime_ns INTEGER,
   archived_size INTEGER,
   last_scan_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS usage_daily (
+  session_id TEXT NOT NULL,
+  date TEXT NOT NULL,
+  in_tokens INTEGER DEFAULT 0,
+  out_tokens INTEGER DEFAULT 0,
+  cache_read_tokens INTEGER DEFAULT 0,
+  cache_write_tokens INTEGER DEFAULT 0,
+  PRIMARY KEY (session_id, date)
 );
 
 CREATE TABLE IF NOT EXISTS subagents (
