@@ -266,6 +266,7 @@ a.row-title { color: var(--text); }
   box-shadow: -2px -3px 8px -4px var(--rim-cool); }
 .badge.stopped { color: var(--faint); border-color: var(--line-soft); cursor: help; }
 .badge.bg { color: var(--halo); border-color: rgba(143, 199, 255, 0.5); border-style: dashed; }
+.badge.prov-codex { color: #6fbf9a; border-color: rgba(94, 176, 139, 0.55); }
 
 /* ---------- 搜索结果组 ---------- */
 .hit-group { border-bottom: 1px solid var(--line-soft); }
@@ -535,6 +536,24 @@ mark {
 /* 深链/定位高亮 */
 @keyframes row-flash { 0% { background: var(--amber-soft); } 100% { background: transparent; } }
 .flash { animation: row-flash 2s ease-out 1; }
+
+/* ---------- 配额窗口 ---------- */
+.quota-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; }
+.q-label { font-size: 10.5px; color: var(--faint); text-transform: uppercase; letter-spacing: 0.06em; }
+.q-val { font-size: 17px; color: var(--text); margin-top: 2px; }
+.q-sub { font-size: 11px; color: var(--dim); margin-top: 2px; }
+.q-ok { color: var(--ok); }
+.q-bad { color: var(--bad); font-weight: 600; }
+.q-blocks {
+  display: flex; align-items: flex-end; gap: 6px;
+  height: 72px; margin-top: 14px; padding-top: 6px;
+  border-top: 1px solid var(--line-soft);
+}
+.q-block { flex: 1; max-width: 56px; height: 100%; display: flex; flex-direction: column; justify-content: flex-end; }
+.q-bar { background: rgba(184, 128, 29, 0.55); border-radius: 2px 2px 0 0; min-height: 2px; }
+.q-block.active .q-bar { background: var(--amber); box-shadow: 0 0 10px rgba(226, 161, 60, 0.35); }
+.q-tick { font-size: 9.5px; color: var(--faint); text-align: center; margin-top: 3px; }
+.q-note { font-size: 11px; color: var(--faint); margin-top: 8px; }
 
 /* 入场:水滴凝结(模糊+缩放收束,spring 落定)。一次性,transform/opacity/filter */
 .reveal { opacity: 0; transform: translateY(14px) scale(0.97); filter: blur(5px); }

@@ -140,6 +140,78 @@ async function loadCurves() {
   drawCharts(await api(`/api/stats/tokens?days=${$("days").value}`));
 }
 
+// ---------- 配额窗口(5h) ----------
+function fmtTok(v) {
+  if (v == null) return "—";
+  if (v >= 1e9) return `${(v / 1e9).toFixed(1)}G`;
+  if (v >= 1e6) return `${(v / 1e6).toFixed(1)}M`;
+  if (v >= 1e3) return `${Math.round(v / 1e3)}k`;
+  return String(v);
+}
+
+function hhmm(iso) {
+  const d = new Date(iso);
+  return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+}
+
+function renderQuota(q) {
+  const cur = q.current;
+  const lim = q.limit_estimate;
+  const parts = [];
+
+  if (!cur) {
+    parts.push('<div class="empty">当前 5h 窗口内没有活动。</div>');
+  } else {
+    let verdict;
+    if (cur.over_history_max) {
+      verdict = '<span class="q-bad">已超历史最大窗口</span>';
+    } else if (cur.depleted_at) {
+      verdict = `<span class="q-bad">按当前速率 ${hhmm(cur.depleted_at)} 触顶</span>`;
+    } else {
+      verdict = '<span class="q-ok">本窗口无触顶风险</span>';
+    }
+    parts.push(`
+      <div class="quota-grid mono">
+        <div class="q-cell"><div class="q-label">当前窗口</div>
+          <div class="q-val">${hhmm(cur.start)}–${hhmm(cur.end)}</div>
+          <div class="q-sub">还剩 ${cur.remaining_minutes} 分钟</div></div>
+        <div class="q-cell"><div class="q-label">已用 tokens(含缓存)</div>
+          <div class="q-val">${fmtTok(cur.total)}</div>
+          <div class="q-sub">非缓存 ${fmtTok(cur.noncache)}${cur.vs_limit_pct != null ? ` · 达历史峰值 ${cur.vs_limit_pct}%` : ""}</div></div>
+        <div class="q-cell"><div class="q-label">燃烧率</div>
+          <div class="q-val">${fmtTok(cur.burn_per_min)}/min</div>
+          <div class="q-sub">窗口结束预计 ${fmtTok(cur.projected_total)}</div></div>
+        <div class="q-cell"><div class="q-label">判定</div>
+          <div class="q-val">${verdict}</div>
+          <div class="q-sub">参照:历史最大窗口 ${fmtTok(lim.tokens)}</div></div>
+      </div>`);
+  }
+
+  const blocks = q.recent_blocks || [];
+  if (blocks.length) {
+    const max = Math.max(...blocks.map((b) => b.total), 1);
+    parts.push(
+      `<div class="q-blocks">` +
+        blocks
+          .map((b) => {
+            const pct = Math.max(2, Math.round((b.total / max) * 100));
+            return `<div class="q-block${b.active ? " active" : ""}" title="${esc(b.start)} ~ ${esc(b.end)}\n共 ${b.total.toLocaleString()} tokens(非缓存 ${b.noncache.toLocaleString()})">
+              <div class="q-bar" style="height:${pct}%"></div>
+              <div class="q-tick mono">${hhmm(b.start)}</div>
+            </div>`;
+          })
+          .join("") +
+        `</div>`
+    );
+  }
+  if (!lim.sample_ok) {
+    parts.push(`<div class="q-note mono">样本不足(已完成窗口 ${lim.blocks_sampled} 个,<5),外推仅供参考。</div>`);
+  }
+  $("quota").innerHTML = parts.join("");
+}
+
+poll(async () => renderQuota(await api("/api/quota", { silent: true })), 60000);
+
 // ---------- 磁盘 ----------
 function barRow(label, bytes, maxBytes, extra = "") {
   const pct = maxBytes ? Math.max(1, Math.round((bytes / maxBytes) * 100)) : 0;

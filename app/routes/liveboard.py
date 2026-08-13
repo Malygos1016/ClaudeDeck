@@ -6,6 +6,7 @@ import sqlite3
 from fastapi import APIRouter, Depends, Query, Request
 
 from ..live import read_jobs, read_live_sessions
+from ..quota import quota_report
 from ..stats import cost_curve, disk_stats, plans_list, project_disk, usage_curve
 from . import request_db
 
@@ -29,6 +30,11 @@ def live(
 @router.get("/jobs")
 def jobs(request: Request):
     return read_jobs(request.app.state.cfg)
+
+
+@router.get("/quota")
+def quota(con: sqlite3.Connection = Depends(request_db)):
+    return quota_report(con)
 
 
 @router.get("/stats/disk")

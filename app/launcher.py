@@ -46,16 +46,23 @@ def _clean_child_env() -> dict[str, str]:
     }
 
 
-def build_resume_command(cfg: Config, cwd: str | None, session_id: str, fork: bool = False) -> str:
+def _resume_inner(cfg: Config, session_id: str, *, fork: bool, provider: str) -> str:
+    if provider == "codex":
+        return f"codex resume {session_id}"  # codex 在 PATH(npm shim);fork 概念不适用
+    inner = f'& "{cfg.claude_exe}" --resume {session_id}'
+    if fork:
+        inner += " --fork-session"
+    return inner
+
+
+def build_resume_command(
+    cfg: Config, cwd: str | None, session_id: str, fork: bool = False, provider: str = "claude"
+) -> str:
     """官方推荐形式:先 cd 再 resume,Windows 分隔符用 ';'(PowerShell)。"""
-    exe = cfg.claude_exe
     parts = []
     if cwd:
         parts.append(f'cd "{cwd}"')
-    resume = f'& "{exe}" --resume {session_id}'
-    if fork:
-        resume += " --fork-session"
-    parts.append(resume)
+    parts.append(_resume_inner(cfg, session_id, fork=fork, provider=provider))
     return "; ".join(parts)
 
 
@@ -114,21 +121,23 @@ def launch_resume(
     *,
     fork: bool = False,
     use_home_fallback: bool = False,
+    provider: str = "claude",
 ) -> dict:
     """拉起 WT 新标签 resume 会话。返回 {ok, used_wt, trust_prewritten, effective_cwd, note}。"""
+    is_claude = provider == "claude"
     effective_cwd = cwd
     if not effective_cwd or not os.path.isdir(effective_cwd):
-        if not use_home_fallback:
+        if not use_home_fallback or not is_claude:
             raise CwdMissing(effective_cwd or "(未知)")
         effective_cwd = str(Path.home())  # --resume 自 2.1.223 跨目录全局搜索,能找到会话
 
-    trust_prewritten = ensure_trusted(cfg, effective_cwd)
+    if not is_claude and shutil.which("codex") is None:
+        raise FileNotFoundError("codex 不在 PATH,无法拉起;用「复制命令」手动跑。")
 
-    inner = f'& "{cfg.claude_exe}" --resume {session_id}'
-    if fork:
-        inner += " --fork-session"
+    trust_prewritten = ensure_trusted(cfg, effective_cwd) if is_claude else False
 
-    title = f"resume {session_id[:8]}"
+    inner = _resume_inner(cfg, session_id, fork=fork, provider=provider)
+    title = f"{'resume' if is_claude else 'codex'} {session_id[:8]}"
     env = _clean_child_env()
     wt = shutil.which("wt.exe")
     if wt:

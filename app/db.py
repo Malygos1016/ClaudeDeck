@@ -4,7 +4,7 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
-SCHEMA_VERSION = "2"
+SCHEMA_VERSION = "3"
 
 DDL = """
 CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT);
@@ -32,6 +32,7 @@ CREATE TABLE IF NOT EXISTS sessions (
   has_compact INTEGER DEFAULT 0,
   archived_at TEXT,
   source_missing INTEGER DEFAULT 0,
+  provider TEXT DEFAULT 'claude',
   updated_at TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_sessions_last_ts ON sessions(last_ts DESC);
@@ -80,6 +81,17 @@ CREATE TABLE IF NOT EXISTS usage_daily (
   cache_write_tokens INTEGER DEFAULT 0,
   PRIMARY KEY (session_id, date)
 );
+
+CREATE TABLE IF NOT EXISTS usage_hourly (
+  session_id TEXT NOT NULL,
+  hour TEXT NOT NULL,
+  in_tokens INTEGER DEFAULT 0,
+  out_tokens INTEGER DEFAULT 0,
+  cache_read_tokens INTEGER DEFAULT 0,
+  cache_write_tokens INTEGER DEFAULT 0,
+  PRIMARY KEY (session_id, hour)
+);
+CREATE INDEX IF NOT EXISTS idx_usage_hourly_hour ON usage_hourly(hour);
 
 CREATE TABLE IF NOT EXISTS subagents (
   agent_id TEXT PRIMARY KEY,

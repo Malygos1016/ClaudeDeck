@@ -136,6 +136,7 @@ async function loadLater() {
 // ---------- 头部 ----------
 function headerBadges(s) {
   const out = [];
+  if (s.provider === "codex") out.push('<span class="badge prov-codex" title="Codex CLI 会话">codex</span>');
   if (s.source_missing) out.push('<span class="badge missing">源已清理</span>');
   else if (s.archived) out.push('<span class="badge archived">已归档</span>');
   if (s.has_compact) out.push('<span class="badge">经历过压缩</span>');
@@ -150,7 +151,10 @@ function renderHeader(det) {
   $("s-badges").innerHTML = headerBadges(s);
 
   const actions = [];
-  if (s.running) {
+  if (s.provider === "codex") {
+    if (!s.source_missing) actions.push(`<button class="ghost-btn primary" id="btn-resume">恢复 ▶</button>`);
+    // codex 会话不参与封存(其目录由 codex 自行管理)
+  } else if (s.running) {
     actions.push('<span class="badge running">运行中·去那个窗口继续</span>');
     actions.push(`<button class="ghost-btn" id="btn-archive" title="事情做完了就封存:拷贝到归档区并标记已归档(唯一的备份途径)">封存</button>`);
   } else if (!s.source_missing) {

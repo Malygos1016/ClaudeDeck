@@ -65,6 +65,41 @@ def list_main_files(projects_root: Path) -> list[MainFile]:
     return out
 
 
+CODEX_ROLLOUT_RE = re.compile(
+    r"^rollout-.*-([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$",
+    re.IGNORECASE,
+)
+
+
+def list_codex_files(codex_sessions_root: Path) -> list[MainFile]:
+    """Codex CLI rollout(sessions/YYYY/MM/DD/rollout-<ts>-<uuid>.jsonl)。
+
+    proj_dir 存相对日期目录(还原完整路径用),session_id 取文件名尾部 uuid
+    (与 session_meta.payload.id 一致,实测)。目录不存在返回空,不装 codex 的机器零成本。
+    """
+    out: list[MainFile] = []
+    if not codex_sessions_root.is_dir():
+        return out
+    for f in sorted(codex_sessions_root.rglob("rollout-*.jsonl")):
+        m = CODEX_ROLLOUT_RE.match(f.stem)
+        if not m:
+            continue
+        try:
+            st = f.stat()
+        except OSError:
+            continue
+        out.append(
+            MainFile(
+                session_id=m.group(1).lower(),
+                proj_dir=f.parent.relative_to(codex_sessions_root).as_posix(),
+                path=f,
+                mtime_ns=st.st_mtime_ns,
+                size=st.st_size,
+            )
+        )
+    return out
+
+
 def walk_companion(companion_dir: Path) -> tuple[int, list[tuple[str, int, int]]]:
     """返回 (总字节数, [(相对路径, mtime_ns, size), ...])。目录不存在返回 (0, [])。"""
     total = 0

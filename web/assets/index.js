@@ -1,7 +1,7 @@
 // 会话列表 + 全文搜索页。
 import { api, copyText, esc, fmtBytes, fmtTime, fullTime, initHeader, resumeSession, reveal, toast } from "./common.js";
 
-const state = { q: "", project: "", archived: "all", sort: "last_ts", order: "desc", page: 1 };
+const state = { q: "", project: "", provider: "all", archived: "all", sort: "last_ts", order: "desc", page: 1 };
 const $ = (id) => document.getElementById(id);
 
 // 固定四列插槽:归档列 | 运行列 | 恢复 | 复制命令。
@@ -23,6 +23,7 @@ function stoppedFor(ts) {
 }
 
 function runSlot(s) {
+  if (s.provider === "codex") return '<span class="slot-empty"></span>'; // codex 无运行注册表
   if (s.running) return '<span class="badge running">运行中</span>';
   return `<span class="badge stopped" title="已停止 ${esc(stoppedFor(s.last_ts))}">已停止</span>`;
 }
@@ -54,6 +55,7 @@ function rowHtml(s, extra = "") {
   return `
   <div class="session-row" data-sid="${esc(s.session_id)}">
     <div class="row-top">
+      ${s.provider === "codex" ? '<span class="badge prov-codex" title="Codex CLI 会话(~/.codex/sessions)">codex</span>' : ""}
       <a class="row-title" href="/session.html?sid=${esc(s.session_id)}" title="${esc(s.title || "")}">${esc(s.title || "(无标题)")}</a>
       <span class="row-actions acts-grid">${actionsHtml(s)}</span>
     </div>
@@ -127,6 +129,7 @@ async function refresh() {
     common.set("q", state.q.trim());
     renderSearch(await api(`/api/search?${common}`));
   } else {
+    common.set("provider", state.provider);
     common.set("archived", state.archived);
     common.set("sort", state.sort);
     common.set("order", state.order);
@@ -169,6 +172,7 @@ function bind() {
 
   $("f-project").addEventListener("change", (e) => { state.project = e.target.value; state.page = 1; refresh(); });
   $("f-archived").addEventListener("change", (e) => { state.archived = e.target.value; state.page = 1; refresh(); });
+  $("f-provider")?.addEventListener("change", (e) => { state.provider = e.target.value; state.page = 1; refresh(); });
   $("f-sort").addEventListener("change", (e) => {
     [state.sort, state.order] = e.target.value.split(":");
     state.page = 1;

@@ -8,6 +8,7 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import PlainTextResponse
 
+from ..codex import parse_codex_view_items
 from ..launcher import build_resume_command
 from ..live import read_live_sessions
 from ..render import export_markdown, parse_view_items, resolve_transcript_path, window
@@ -42,6 +43,7 @@ def list_sessions(
     request: Request,
     q: str | None = None,
     project: str | None = None,
+    provider: str = Query("all", pattern="^(all|claude|codex)$"),
     archived: str = Query("all", pattern="^(all|live|missing)$"),
     sort: str = "last_ts",
     order: str = Query("desc", pattern="^(asc|desc)$"),
@@ -62,6 +64,9 @@ def list_sessions(
     if project:
         where.append("cwd = ?")
         params.append(project)
+    if provider != "all":
+        where.append("COALESCE(provider, 'claude') = ?")
+        params.append(provider)
     if archived == "live":
         where.append("source_missing = 0")
     elif archived == "missing":
@@ -148,11 +153,26 @@ def _session_row(con: sqlite3.Connection, sid: str) -> sqlite3.Row:
     return row
 
 
-def _resolved_path(request: Request, row: sqlite3.Row) -> tuple[Path, str]:
+def _resolved_path(
+    request: Request, row: sqlite3.Row, con: sqlite3.Connection
+) -> tuple[Path, str]:
+    if (row["provider"] or "claude") == "codex":
+        f = con.execute(
+            "SELECT path FROM files WHERE session_id=? LIMIT 1", (row["session_id"],)
+        ).fetchone()
+        if f is not None and Path(f["path"]).is_file():
+            return Path(f["path"]), "live"
+        raise HTTPException(410, "Codex 源文件已不存在(可能被 codex 自身归档或清理)")
     res = resolve_transcript_path(request.app.state.cfg, row["proj_dir"], row["session_id"])
     if res is None:
         raise HTTPException(410, "该会话的源文件与归档副本都不存在(可能被清理且未及归档)")
     return res
+
+
+def _view_items(row: sqlite3.Row, path: Path) -> list[dict]:
+    if (row["provider"] or "claude") == "codex":
+        return parse_codex_view_items(path)
+    return parse_view_items(path)
 
 
 @router.get("/sessions/{sid}/messages")
@@ -167,8 +187,8 @@ def session_messages(
     con: sqlite3.Connection = Depends(request_db),
 ):
     row = _session_row(con, sid)
-    path, source = _resolved_path(request, row)
-    items = parse_view_items(path)
+    path, source = _resolved_path(request, row, con)
+    items = _view_items(row, path)
     win = window(
         items,
         limit=limit,
@@ -222,8 +242,8 @@ def export_session(
     con: sqlite3.Connection = Depends(request_db),
 ):
     row = _session_row(con, sid)
-    path, _source = _resolved_path(request, row)
-    items = parse_view_items(path)
+    path, _source = _resolved_path(request, row, con)
+    items = _view_items(row, path)
     md = export_markdown(items, dict(row))
     fname = f"claude-session-{sid.lower()[:8]}.md"
     return PlainTextResponse(
@@ -241,11 +261,17 @@ def resume_command(
     con: sqlite3.Connection = Depends(request_db),
 ):
     row = con.execute(
-        "SELECT cwd, source_missing FROM sessions WHERE session_id=?", (sid.lower(),)
+        "SELECT cwd, source_missing, provider FROM sessions WHERE session_id=?", (sid.lower(),)
     ).fetchone()
     if row is None:
         raise HTTPException(404, "库中没有该会话")
-    cmd = build_resume_command(request.app.state.cfg, row["cwd"], sid.lower(), fork=fork)
+    cmd = build_resume_command(
+        request.app.state.cfg,
+        row["cwd"],
+        sid.lower(),
+        fork=fork,
+        provider=row["provider"] or "claude",
+    )
     return {
         "command": cmd,
         "source_missing": bool(row["source_missing"]),

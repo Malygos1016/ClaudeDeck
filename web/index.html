@@ -27,6 +27,11 @@
            placeholder="搜索全部会话正文与标题…回车执行;1-2 字自动转模糊匹配">
     <div class="filters">
       <select id="f-project" title="按项目筛选"><option value="">全部项目</option></select>
+      <select id="f-provider" title="按 provider 筛选">
+        <option value="all">全部 provider</option>
+        <option value="claude">claude</option>
+        <option value="codex">codex</option>
+      </select>
       <select id="f-archived" title="按来源状态筛选">
         <option value="all">全部会话</option>
         <option value="live">源仍在</option>

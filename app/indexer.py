@@ -14,9 +14,11 @@ from pathlib import Path
 from typing import Callable
 
 from . import archive as archive_mod
+from .codex import parse_codex_chunk
 from .config import Config
 from .scanner import (
     MainFile,
+    list_codex_files,
     list_main_files,
     list_subagent_metas,
     munge_path,
@@ -73,20 +75,26 @@ class Indexer:
                 "errors": [],
             }
             mains = list_main_files(self.cfg.projects_root)
-            stats["files_seen"] = len(mains)
+            codex_files = list_codex_files(self.cfg.codex_sessions_root)
+            total = len(mains) + len(codex_files)
+            stats["files_seen"] = total
             self.status.update(
                 phase="scanning",
-                files_total=len(mains),
+                files_total=total,
                 files_done=0,
                 started_at=now_iso(),
                 finished_at=None,
             )
             live_sids = {m.session_id for m in mains}
 
-            for mf in mains:
+            for mf, provider in [(m, "claude") for m in mains] + [
+                (c, "codex") for c in codex_files
+            ]:
                 self.status["current"] = f"{mf.proj_dir}/{mf.path.name}"
                 try:
-                    self._index_main(mf, force=force, stats=stats, archived=False)
+                    self._index_main(
+                        mf, force=force, stats=stats, archived=False, provider=provider
+                    )
                     self.con.commit()
                 except Exception as e:  # 单文件失败不拖垮整轮,计数并保留错误样本
                     self.con.rollback()
@@ -95,13 +103,15 @@ class Indexer:
                         stats["errors"].append(f"{mf.path.name}: {e!r}")
                 self.status["files_done"] += 1
                 if progress_cb:
-                    progress_cb(self.status["files_done"], len(mains), mf.path.name)
+                    progress_cb(self.status["files_done"], total, mf.path.name)
 
             try:
                 archived_paths = self._index_archive_only(live_sids, force=force, stats=stats)
                 self._ingest_history(stats)
                 self._prune_stale_files(
-                    {str(m.path) for m in mains} | archived_paths
+                    {str(m.path) for m in mains}
+                    | {str(c.path) for c in codex_files}
+                    | archived_paths
                 )
                 self.con.commit()
             except Exception as e:
@@ -152,13 +162,22 @@ class Indexer:
                 return mf
         return None
 
-    def _index_main(self, mf: MainFile, *, force: bool, stats: dict, archived: bool) -> None:
+    def _index_main(
+        self,
+        mf: MainFile,
+        *,
+        force: bool,
+        stats: dict,
+        archived: bool,
+        provider: str = "claude",
+    ) -> None:
+        is_claude = provider == "claude"
         row = self.con.execute("SELECT * FROM files WHERE path=?", (str(mf.path),)).fetchone()
         fresh = force or row is None
         if row is not None and not force:
             if row["mtime_ns"] == mf.mtime_ns and row["size"] == mf.size:
                 stats["files_skipped"] += 1
-                if not archived:
+                if is_claude and not archived:
                     self._refresh_companion(mf)
                 return
             if mf.size < (row["parsed_offset"] or 0):
@@ -166,14 +185,17 @@ class Indexer:
 
         start_offset = 0 if fresh else (row["parsed_offset"] or 0)
         start_seq = 0 if fresh else (row["seq_end"] or 0)
+        parse = parse_chunk if is_claude else parse_codex_chunk
         with open(mf.path, "rb") as fp:
-            chunk = parse_chunk(fp, start_offset=start_offset, start_seq=start_seq)
+            chunk = parse(fp, start_offset=start_offset, start_seq=start_seq)
 
-        self._apply_chunk(mf, chunk, fresh=fresh, prev=row, archived=archived)
+        self._apply_chunk(
+            mf, chunk, fresh=fresh, prev=row, archived=archived, provider=provider
+        )
         stats["files_parsed"] += 1
         stats["rows_indexed"] += len(chunk.rows)
         stats["bad_lines"] += chunk.bad_lines
-        if not archived:
+        if is_claude and not archived:
             self._refresh_companion(mf)
 
     def _apply_chunk(
@@ -184,6 +206,7 @@ class Indexer:
         fresh: bool,
         prev: sqlite3.Row | None,
         archived: bool,
+        provider: str = "claude",
     ) -> None:
         sid = mf.session_id
         srow = self.con.execute(
@@ -193,6 +216,7 @@ class Indexer:
         if fresh:
             self._delete_session_messages(sid)
             self.con.execute("DELETE FROM usage_daily WHERE session_id=?", (sid,))
+            self.con.execute("DELETE FROM usage_hourly WHERE session_id=?", (sid,))
 
         # 正文行入库 + FTS
         cur = self.con.cursor()
@@ -232,6 +256,7 @@ class Indexer:
             + (old["cache_write_tokens"] if old else 0),
             "has_compact": 1 if (chunk.has_compact or (old and old["has_compact"])) else 0,
             "source_missing": 1 if archived else 0,
+            "provider": provider,
             "updated_at": now_iso(),
         }
         self._upsert_session(merged)
@@ -247,6 +272,19 @@ class Indexer:
                 " cache_read_tokens=cache_read_tokens+excluded.cache_read_tokens,"
                 " cache_write_tokens=cache_write_tokens+excluded.cache_write_tokens",
                 (sid, day, v[0], v[1], v[2], v[3]),
+            )
+
+        # 按小时 usage(与按日同规则),供 5h 配额窗口
+        for hour, v in chunk.usage_hourly.items():
+            self.con.execute(
+                "INSERT INTO usage_hourly(session_id, hour, in_tokens, out_tokens,"
+                " cache_read_tokens, cache_write_tokens) VALUES(?,?,?,?,?,?) "
+                "ON CONFLICT(session_id, hour) DO UPDATE SET"
+                " in_tokens=in_tokens+excluded.in_tokens,"
+                " out_tokens=out_tokens+excluded.out_tokens,"
+                " cache_read_tokens=cache_read_tokens+excluded.cache_read_tokens,"
+                " cache_write_tokens=cache_write_tokens+excluded.cache_write_tokens",
+                (sid, hour, v[0], v[1], v[2], v[3]),
             )
 
         # 标题与末次输入进 FTS(kind 唯一,upsert)

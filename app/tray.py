@@ -56,7 +56,23 @@ def main() -> None:
     server = uvicorn.Server(
         uvicorn.Config(create_app(cfg), host="127.0.0.1", port=cfg.port, log_level="warning")
     )
-    threading.Thread(target=server.run, daemon=True).start()
+    t = threading.Thread(target=server.run, daemon=True)
+    t.start()
+    # 必须等到真的绑上端口才常驻:双开竞态下抢端口失败的实例若继续挂托盘,
+    # 会变成攥着数据库连接的僵尸(2026-08-13 实测)
+    import time
+
+    for _ in range(100):
+        if server.started:
+            break
+        if not t.is_alive():
+            print(f"uvicorn 线程退出(端口 {cfg.port} 被占?),本实例不驻留。")
+            webbrowser.open(url)
+            return
+        time.sleep(0.1)
+    else:
+        print("10s 内未完成端口绑定,本实例退出。")
+        return
 
     import pystray
     from pystray import Menu, MenuItem

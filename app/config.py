@@ -28,6 +28,8 @@ class Config:
     archive_quiet_minutes: int = 15
     live_poll_ms: int = 2000
     claude_exe: str = field(default_factory=_default_claude_exe)
+    # Codex CLI 会话目录(存在即自动纳入索引;不装 codex 的机器自然跳过)
+    codex_home: str = field(default_factory=lambda: str(Path.home() / ".codex"))
     index_thinking: bool = False
     index_tool_results: bool = False
     # 本配置文件自身的位置(save 写回处;测试用临时路径隔离,不污染真实 config.json)
@@ -44,6 +46,10 @@ class Config:
     @property
     def archive_dir_path(self) -> Path:
         return Path(self.archive_dir)
+
+    @property
+    def codex_sessions_root(self) -> Path:
+        return Path(self.codex_home) / "sessions"
 
     @property
     def archive_projects_root(self) -> Path:

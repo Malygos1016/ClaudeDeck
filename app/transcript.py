@@ -65,6 +65,8 @@ class ChunkResult:
     cache_write_tokens: int = 0
     # 按日 usage(键=YYYY-MM-DD,值=[in, out, cache_read, cache_write]),供用量曲线
     usage_daily: dict[str, list[int]] = field(default_factory=dict)
+    # 按小时 usage(键=YYYY-MM-DDTHH,UTC),供 5h 配额窗口
+    usage_hourly: dict[str, list[int]] = field(default_factory=dict)
 
 
 def clean_user_title(text: str, limit: int = 80) -> str:
@@ -88,46 +90,15 @@ def parse_chunk(
     返回的 new_offset 永远指向最后一个被完整消费的行之后(半行安全);
     seq 只对带 uuid 的行递增,与渲染层共用同一编号规则。
     """
-    fp.seek(start_offset)
-    offset = start_offset
-    seq = start_seq
     res = ChunkResult(new_offset=start_offset, seq_end=start_seq)
+    seq = start_seq
 
-    while True:
-        line_start = offset
-        line = fp.readline(max_line_bytes)
-        if not line:
-            break
-        offset += len(line)
-
-        if not line.endswith(b"\n"):
-            if len(line) >= max_line_bytes:
-                # 超长行:吞到下一个换行;若到 EOF 仍无换行(还在写),整段不消费
-                consumed = _discard_to_newline(fp, max_line_bytes)
-                if consumed is None:
-                    offset = line_start
-                    break
-                offset += consumed
+    for kind, line_start, d, offset in iter_jsonl(
+        fp, start_offset=start_offset, max_line_bytes=max_line_bytes
+    ):
+        if kind != "obj":
+            if kind == "bad":
                 res.bad_lines += 1
-                res.new_offset = offset
-                continue
-            # 尾部半行:Claude Code 正在写,下一轮再读
-            offset = line_start
-            break
-
-        stripped = line.strip()
-        if not stripped:
-            res.new_offset = offset
-            continue
-
-        try:
-            d = json.loads(stripped)
-        except (json.JSONDecodeError, UnicodeDecodeError, ValueError):
-            res.bad_lines += 1
-            res.new_offset = offset
-            continue
-        if not isinstance(d, dict):
-            res.bad_lines += 1
             res.new_offset = offset
             continue
 
@@ -147,6 +118,51 @@ def parse_chunk(
 
     res.seq_end = seq
     return res
+
+
+def iter_jsonl(fp: BinaryIO, *, start_offset: int = 0, max_line_bytes: int = MAX_LINE_BYTES):
+    """流式产出完整行:(kind, line_start, obj, offset_after)。
+
+    kind ∈ 'obj'(合法 JSON dict) | 'bad'(坏行/超长行/非 dict) | 'blank'(空行)。
+    半行(文件正在被写)与写入中的超长行处自然终止,绝不消费;
+    调用方以最后一次产出的 offset_after 作为下一轮解析起点。
+    Claude 与 Codex 两种 JSONL 共用这一套行框架纪律。
+    """
+    fp.seek(start_offset)
+    offset = start_offset
+    while True:
+        line_start = offset
+        line = fp.readline(max_line_bytes)
+        if not line:
+            return
+        offset += len(line)
+
+        if not line.endswith(b"\n"):
+            if len(line) >= max_line_bytes:
+                # 超长行:吞到下一个换行;若到 EOF 仍无换行(还在写),整段不消费
+                consumed = _discard_to_newline(fp, max_line_bytes)
+                if consumed is None:
+                    return
+                offset += consumed
+                yield "bad", line_start, None, offset
+                continue
+            # 尾部半行:写入方还没收笔,下一轮再读
+            return
+
+        stripped = line.strip()
+        if not stripped:
+            yield "blank", line_start, None, offset
+            continue
+
+        try:
+            d = json.loads(stripped)
+        except (json.JSONDecodeError, UnicodeDecodeError, ValueError):
+            yield "bad", line_start, None, offset
+            continue
+        if not isinstance(d, dict):
+            yield "bad", line_start, None, offset
+            continue
+        yield "obj", line_start, d, offset
 
 
 def _discard_to_newline(fp: BinaryIO, max_line_bytes: int) -> int | None:
@@ -252,6 +268,10 @@ def _handle_message_line(
                 day = res.usage_daily.setdefault(ts[:10], [0, 0, 0, 0])
                 for i in range(4):
                     day[i] += vals[i]
+                if len(ts) >= 13:
+                    hour = res.usage_hourly.setdefault(ts[:13], [0, 0, 0, 0])
+                    for i in range(4):
+                        hour[i] += vals[i]
 
     elif mtype == "system":
         if d.get("subtype") == "compact_boundary":

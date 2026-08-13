@@ -34,18 +34,20 @@ def resume_session(
     con: sqlite3.Connection = Depends(request_db),
 ):
     row = _srow(con, sid)
+    provider = row["provider"] or "claude"
     if row["source_missing"]:
         raise HTTPException(
             409, "源 transcript 已被清理,resume 会找不到会话——先在归档页还原,再恢复。"
         )
-    # 已在某个窗口里打开的会话不能再 resume(CC 检测并发后会直接退出,实测)
-    for s in read_live_sessions(request.app.state.cfg)["sessions"]:
-        if (s.get("session_id") or "").lower() == sid.lower():
-            raise HTTPException(
-                409,
-                f"该会话已在窗口「{s.get('name') or s.get('pid')}」中打开(状态 {s.get('status')}),"
-                "直接用那个窗口即可;要并行探索可用 fork。",
-            )
+    if provider == "claude":
+        # 已在某个窗口里打开的会话不能再 resume(CC 检测并发后会直接退出,实测)
+        for s in read_live_sessions(request.app.state.cfg)["sessions"]:
+            if (s.get("session_id") or "").lower() == sid.lower():
+                raise HTTPException(
+                    409,
+                    f"该会话已在窗口「{s.get('name') or s.get('pid')}」中打开(状态 {s.get('status')}),"
+                    "直接用那个窗口即可;要并行探索可用 fork。",
+                )
     try:
         return launch_resume(
             request.app.state.cfg,
@@ -53,7 +55,10 @@ def resume_session(
             sid.lower(),
             fork=fork,
             use_home_fallback=use_home_fallback,
+            provider=provider,
         )
+    except FileNotFoundError as e:
+        raise HTTPException(409, str(e))
     except CwdMissing as e:
         raise HTTPException(
             409,
@@ -64,7 +69,9 @@ def resume_session(
 
 @router.post("/sessions/{sid}/archive")
 def archive_now(sid: str, request: Request, con: sqlite3.Connection = Depends(request_db)):
-    _srow(con, sid)
+    row = _srow(con, sid)
+    if (row["provider"] or "claude") != "claude":
+        raise HTTPException(409, "Codex 会话不参与 ClaudeDeck 归档(其目录由 codex 自行管理)。")
     try:
         res = request.app.state.indexer.force_archive(sid.lower())
     except FileNotFoundError as e:
