@@ -47,6 +47,17 @@ def create_app(cfg: Config | None = None) -> FastAPI:
     app = FastAPI(title="ClaudeDeck", version=VERSION, lifespan=lifespan)
     app.state.cfg = cfg
     app.state.indexer = idx
+
+    # 静态资源必须 no-cache:不给缓存策略时浏览器会"启发式缓存",改版后用户
+    # 可能一直卡在旧页面(2026-08-13 实测,徽章修复到不了浏览器)。
+    # no-cache = 可缓存但每次回源校验,配 StaticFiles 的 ETag 走 304,代价极小。
+    @app.middleware("http")
+    async def _no_stale_static(request, call_next):
+        resp = await call_next(request)
+        if not request.url.path.startswith("/api"):
+            resp.headers["Cache-Control"] = "no-cache"
+        return resp
+
     app.include_router(build_api_router())
     app.mount("/", StaticFiles(directory=str(WEB_DIR), html=True), name="web")
     return app
