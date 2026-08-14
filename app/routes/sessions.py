@@ -9,8 +9,9 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import PlainTextResponse
 
 from ..codex import parse_codex_view_items
-from ..launcher import build_resume_command
+from ..launcher import PROVIDER_NOTES, build_resume_command
 from ..live import read_live_sessions
+from ..pi import parse_pi_view_items
 from ..render import export_markdown, parse_view_items, resolve_transcript_path, window
 from ..search import MARK_L, MARK_R, search as do_search
 from ..transcript import bridge_url
@@ -43,7 +44,7 @@ def list_sessions(
     request: Request,
     q: str | None = None,
     project: str | None = None,
-    provider: str = Query("all", pattern="^(all|claude|codex)$"),
+    provider: str = Query("all", pattern="^(all|claude|codex|pi|crush)$"),
     archived: str = Query("all", pattern="^(all|live|missing)$"),
     sort: str = "last_ts",
     order: str = Query("desc", pattern="^(asc|desc)$"),
@@ -156,23 +157,53 @@ def _session_row(con: sqlite3.Connection, sid: str) -> sqlite3.Row:
 def _resolved_path(
     request: Request, row: sqlite3.Row, con: sqlite3.Connection
 ) -> tuple[Path, str]:
-    if (row["provider"] or "claude") == "codex":
+    provider = row["provider"] or "claude"
+    if provider in ("codex", "pi"):
         f = con.execute(
             "SELECT path FROM files WHERE session_id=? LIMIT 1", (row["session_id"],)
         ).fetchone()
         if f is not None and Path(f["path"]).is_file():
             return Path(f["path"]), "live"
-        raise HTTPException(410, "Codex 源文件已不存在(可能被 codex 自身归档或清理)")
+        raise HTTPException(410, f"{provider} 源文件已不存在(可能被该工具自身归档或清理)")
     res = resolve_transcript_path(request.app.state.cfg, row["proj_dir"], row["session_id"])
     if res is None:
         raise HTTPException(410, "该会话的源文件与归档副本都不存在(可能被清理且未及归档)")
     return res
 
 
-def _view_items(row: sqlite3.Row, path: Path) -> list[dict]:
-    if (row["provider"] or "claude") == "codex":
-        return parse_codex_view_items(path)
-    return parse_view_items(path)
+def _index_view_items(con: sqlite3.Connection, sid: str) -> list[dict]:
+    """库型 provider(crush)没有可重读的 transcript 文件,视图直接出自本索引。"""
+    from ..render import render_markdown
+
+    items = []
+    for r in con.execute(
+        "SELECT seq, ts, kind, text FROM messages WHERE session_id=?"
+        " AND kind IN ('user_text','assistant_text') ORDER BY seq",
+        (sid,),
+    ):
+        items.append(
+            {
+                "seq": r["seq"], "uuid": None, "ts": r["ts"],
+                "role": "user" if r["kind"] == "user_text" else "assistant",
+                "hidden_default": False,
+                "blocks": [{"kind": "md_html", "html": render_markdown(r["text"])}],
+            }
+        )
+    return items
+
+
+def _load_view(
+    request: Request, row: sqlite3.Row, con: sqlite3.Connection
+) -> tuple[list[dict], str]:
+    provider = row["provider"] or "claude"
+    if provider == "crush":
+        return _index_view_items(con, row["session_id"]), "index"
+    path, source = _resolved_path(request, row, con)
+    if provider == "codex":
+        return parse_codex_view_items(path), source
+    if provider == "pi":
+        return parse_pi_view_items(path), source
+    return parse_view_items(path), source
 
 
 @router.get("/sessions/{sid}/messages")
@@ -187,8 +218,7 @@ def session_messages(
     con: sqlite3.Connection = Depends(request_db),
 ):
     row = _session_row(con, sid)
-    path, source = _resolved_path(request, row, con)
-    items = _view_items(row, path)
+    items, source = _load_view(request, row, con)
     win = window(
         items,
         limit=limit,
@@ -242,8 +272,7 @@ def export_session(
     con: sqlite3.Connection = Depends(request_db),
 ):
     row = _session_row(con, sid)
-    path, _source = _resolved_path(request, row, con)
-    items = _view_items(row, path)
+    items, _source = _load_view(request, row, con)
     md = export_markdown(items, dict(row))
     fname = f"claude-session-{sid.lower()[:8]}.md"
     return PlainTextResponse(
@@ -265,15 +294,13 @@ def resume_command(
     ).fetchone()
     if row is None:
         raise HTTPException(404, "库中没有该会话")
+    provider = row["provider"] or "claude"
     cmd = build_resume_command(
-        request.app.state.cfg,
-        row["cwd"],
-        sid.lower(),
-        fork=fork,
-        provider=row["provider"] or "claude",
+        request.app.state.cfg, row["cwd"], sid.lower(), fork=fork, provider=provider
     )
-    return {
-        "command": cmd,
-        "source_missing": bool(row["source_missing"]),
-        "note": "源已被清理的会话需先还原才能 resume" if row["source_missing"] else None,
-    }
+    note = None
+    if row["source_missing"]:
+        note = "源已被清理的会话需先还原才能 resume"
+    elif provider in PROVIDER_NOTES:
+        note = PROVIDER_NOTES[provider]
+    return {"command": cmd, "source_missing": bool(row["source_missing"]), "note": note}

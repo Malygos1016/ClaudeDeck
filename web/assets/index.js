@@ -23,7 +23,7 @@ function stoppedFor(ts) {
 }
 
 function runSlot(s) {
-  if (s.provider === "codex") return '<span class="slot-empty"></span>'; // codex 无运行注册表
+  if (s.provider && s.provider !== "claude") return '<span class="slot-empty"></span>'; // 仅 claude 有运行注册表
   if (s.running) return '<span class="badge running">运行中</span>';
   return `<span class="badge stopped" title="已停止 ${esc(stoppedFor(s.last_ts))}">已停止</span>`;
 }
@@ -55,7 +55,7 @@ function rowHtml(s, extra = "") {
   return `
   <div class="session-row" data-sid="${esc(s.session_id)}">
     <div class="row-top">
-      ${s.provider === "codex" ? '<span class="badge prov-codex" title="Codex CLI 会话(~/.codex/sessions)">codex</span>' : ""}
+      ${s.provider && s.provider !== "claude" ? `<span class="badge prov-${esc(s.provider)}">${esc(s.provider)}</span>` : ""}
       <a class="row-title" href="/session.html?sid=${esc(s.session_id)}" title="${esc(s.title || "")}">${esc(s.title || "(无标题)")}</a>
       <span class="row-actions acts-grid">${actionsHtml(s)}</span>
     </div>

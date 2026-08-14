@@ -271,6 +271,8 @@ a.row-title { color: var(--text); }
 .badge.stopped { color: var(--faint); border-color: var(--line-soft); cursor: help; }
 .badge.bg { color: var(--halo); border-color: rgba(143, 199, 255, 0.5); border-style: dashed; }
 .badge.prov-codex { color: #6fbf9a; border-color: rgba(94, 176, 139, 0.55); }
+.badge.prov-pi { color: #b39ddb; border-color: rgba(150, 123, 200, 0.55); }
+.badge.prov-crush { color: #d78fb6; border-color: rgba(199, 110, 156, 0.55); }
 
 /* ---------- 搜索结果组 ---------- */
 .hit-group { border-bottom: 1px solid var(--line-soft); }

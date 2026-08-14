@@ -100,6 +100,40 @@ def list_codex_files(codex_sessions_root: Path) -> list[MainFile]:
     return out
 
 
+PI_FILE_RE = re.compile(
+    r"_([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$", re.IGNORECASE
+)
+
+
+def list_pi_files(pi_sessions_root: Path) -> list[MainFile]:
+    """pi agent(sessions/<munged-cwd>/<ISO时间>_<uuid>.jsonl)。
+
+    目录名是保留中文的 munged cwd,但会话头行存有原样 cwd,解析层取那个;
+    session_id 取文件名尾部 uuid。
+    """
+    out: list[MainFile] = []
+    if not pi_sessions_root.is_dir():
+        return out
+    for f in sorted(pi_sessions_root.rglob("*.jsonl")):
+        m = PI_FILE_RE.search(f.stem)
+        if not m:
+            continue
+        try:
+            st = f.stat()
+        except OSError:
+            continue
+        out.append(
+            MainFile(
+                session_id=m.group(1).lower(),
+                proj_dir=f.parent.name,
+                path=f,
+                mtime_ns=st.st_mtime_ns,
+                size=st.st_size,
+            )
+        )
+    return out
+
+
 def walk_companion(companion_dir: Path) -> tuple[int, list[tuple[str, int, int]]]:
     """返回 (总字节数, [(相对路径, mtime_ns, size), ...])。目录不存在返回 (0, [])。"""
     total = 0

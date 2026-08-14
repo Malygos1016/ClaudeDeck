@@ -46,9 +46,20 @@ def _clean_child_env() -> dict[str, str]:
     }
 
 
+# 非 claude provider 的可执行名(npm shim / winget link,均靠 PATH 解析)与提示语
+PROVIDER_EXES = {"codex": "codex", "pi": "pi", "crush": "crush"}
+PROVIDER_NOTES = {
+    "crush": "Crush 没有命令行级 resume:已在项目目录打开 crush,请在它的会话列表里选择该会话。",
+}
+
+
 def _resume_inner(cfg: Config, session_id: str, *, fork: bool, provider: str) -> str:
     if provider == "codex":
-        return f"codex resume {session_id}"  # codex 在 PATH(npm shim);fork 概念不适用
+        return f"codex resume {session_id}"  # fork 概念不适用
+    if provider == "pi":
+        return f"pi --session {session_id}"  # cd 到项目目录后按 uuid 解析
+    if provider == "crush":
+        return "crush"  # 无命令行级 resume,开 TUI 后在列表里选
     inner = f'& "{cfg.claude_exe}" --resume {session_id}'
     if fork:
         inner += " --fork-session"
@@ -131,8 +142,10 @@ def launch_resume(
             raise CwdMissing(effective_cwd or "(未知)")
         effective_cwd = str(Path.home())  # --resume 自 2.1.223 跨目录全局搜索,能找到会话
 
-    if not is_claude and shutil.which("codex") is None:
-        raise FileNotFoundError("codex 不在 PATH,无法拉起;用「复制命令」手动跑。")
+    if not is_claude:
+        exe = PROVIDER_EXES.get(provider)
+        if exe is None or shutil.which(exe) is None:
+            raise FileNotFoundError(f"{exe or provider} 不在 PATH,无法拉起;用「复制命令」手动跑。")
 
     trust_prewritten = ensure_trusted(cfg, effective_cwd) if is_claude else False
 
@@ -161,5 +174,5 @@ def launch_resume(
         "used_wt": used_wt,
         "trust_prewritten": trust_prewritten,
         "effective_cwd": effective_cwd,
-        "note": RESUME_NOTE,
+        "note": PROVIDER_NOTES.get(provider, RESUME_NOTE if is_claude else None),
     }

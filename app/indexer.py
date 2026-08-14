@@ -16,15 +16,21 @@ from typing import Callable
 from . import archive as archive_mod
 from .codex import parse_codex_chunk
 from .config import Config
+from .crush import list_crush_projects, read_crush_db
+from .pi import parse_pi_chunk
 from .scanner import (
     MainFile,
     list_codex_files,
     list_main_files,
+    list_pi_files,
     list_subagent_metas,
     munge_path,
     walk_companion,
 )
-from .transcript import ChunkResult, parse_chunk
+from .transcript import MAX_TEXT_CHARS, ChunkResult, parse_chunk
+
+# 文件型 provider 的解析器;crush 是库型,走 _index_crush
+PARSERS = {"claude": parse_chunk, "codex": parse_codex_chunk, "pi": parse_pi_chunk}
 
 HISTORY_SESSION_KEY = "<history>"
 
@@ -76,7 +82,8 @@ class Indexer:
             }
             mains = list_main_files(self.cfg.projects_root)
             codex_files = list_codex_files(self.cfg.codex_sessions_root)
-            total = len(mains) + len(codex_files)
+            pi_files = list_pi_files(self.cfg.pi_sessions_root)
+            total = len(mains) + len(codex_files) + len(pi_files)
             stats["files_seen"] = total
             self.status.update(
                 phase="scanning",
@@ -87,9 +94,11 @@ class Indexer:
             )
             live_sids = {m.session_id for m in mains}
 
-            for mf, provider in [(m, "claude") for m in mains] + [
-                (c, "codex") for c in codex_files
-            ]:
+            for mf, provider in (
+                [(m, "claude") for m in mains]
+                + [(c, "codex") for c in codex_files]
+                + [(p, "pi") for p in pi_files]
+            ):
                 self.status["current"] = f"{mf.proj_dir}/{mf.path.name}"
                 try:
                     self._index_main(
@@ -105,12 +114,16 @@ class Indexer:
                 if progress_cb:
                     progress_cb(self.status["files_done"], total, mf.path.name)
 
+            crush_paths = self._index_crush(force=force, stats=stats)
+
             try:
                 archived_paths = self._index_archive_only(live_sids, force=force, stats=stats)
                 self._ingest_history(stats)
                 self._prune_stale_files(
                     {str(m.path) for m in mains}
                     | {str(c.path) for c in codex_files}
+                    | {str(p.path) for p in pi_files}
+                    | crush_paths
                     | archived_paths
                 )
                 self.con.commit()
@@ -185,7 +198,7 @@ class Indexer:
 
         start_offset = 0 if fresh else (row["parsed_offset"] or 0)
         start_seq = 0 if fresh else (row["seq_end"] or 0)
-        parse = parse_chunk if is_claude else parse_codex_chunk
+        parse = PARSERS[provider]
         with open(mf.path, "rb") as fp:
             chunk = parse(fp, start_offset=start_offset, start_seq=start_seq)
 
@@ -391,6 +404,102 @@ class Indexer:
             self.con.execute(
                 "DELETE FROM messages WHERE session_id=? AND kind=?", (sid, kind)
             )
+
+    # ---------- crush(库型 provider) ----------
+
+    def _index_crush(self, *, force: bool, stats: dict) -> set[str]:
+        """crush.db 里的会话以虚拟路径 <db>::<sid> 记账,updated_at 变了才重摄取。"""
+        paths: set[str] = set()
+        for cwd, db in list_crush_projects(Path(self.cfg.crush_projects_json)):
+            try:
+                sessions = read_crush_db(db)
+                mtime_ns = db.stat().st_mtime_ns
+            except (sqlite3.Error, OSError) as e:
+                stats["file_errors"] += 1
+                if len(stats["errors"]) < 10:
+                    stats["errors"].append(f"{db}: {e!r}")
+                continue
+            stats["files_seen"] += 1
+            changed = False
+            try:
+                for s in sessions:
+                    vpath = f"{db}::{s['session_id']}"
+                    paths.add(vpath)
+                    row = self.con.execute(
+                        "SELECT parsed_offset FROM files WHERE path=?", (vpath,)
+                    ).fetchone()
+                    if (
+                        row is not None
+                        and not force
+                        and (row["parsed_offset"] or 0) == s["updated_at_raw"]
+                    ):
+                        continue
+                    self._apply_crush_session(db, cwd, s, vpath, mtime_ns)
+                    changed = True
+                    stats["rows_indexed"] += len(s["rows"])
+                self.con.commit()
+            except Exception as e:
+                self.con.rollback()
+                stats["file_errors"] += 1
+                if len(stats["errors"]) < 10:
+                    stats["errors"].append(f"{db}: {e!r}")
+                continue
+            stats["files_parsed" if changed else "files_skipped"] += 1
+        return paths
+
+    def _apply_crush_session(
+        self, db: Path, cwd: str, s: dict, vpath: str, mtime_ns: int
+    ) -> None:
+        sid = s["session_id"]
+        self._delete_session_messages(sid)
+        self.con.execute("DELETE FROM usage_daily WHERE session_id=?", (sid,))
+        self.con.execute("DELETE FROM usage_hourly WHERE session_id=?", (sid,))
+
+        cur = self.con.cursor()
+        pending_fts: list[tuple[int, str]] = []
+        last_user: str | None = None
+        for seq, ts, kind, text in s["rows"]:
+            text = text[:MAX_TEXT_CHARS]
+            cur.execute(
+                "INSERT INTO messages(session_id, uuid, seq, byte_offset, ts, kind, text) "
+                "VALUES(?, NULL, ?, NULL, ?, ?, ?)",
+                (sid, seq, ts, kind, text),
+            )
+            pending_fts.append((cur.lastrowid, text))
+            if kind == "user_text":
+                last_user = text
+        cur.executemany("INSERT INTO messages_fts(rowid, text) VALUES(?,?)", pending_fts)
+
+        title = s["title"]
+        self._upsert_session(
+            {
+                "session_id": sid,
+                "proj_dir": str(db.parent),
+                "cwd": cwd,
+                "title": title,
+                "title_source": "crush",
+                "last_prompt": last_user[:500] if last_user else None,
+                "first_ts": s["first_ts"],
+                "last_ts": s["last_ts"],
+                "msg_count": s["msg_count"],
+                "in_tokens": s["in_tokens"],
+                "out_tokens": s["out_tokens"],
+                "source_missing": 0,
+                "provider": "crush",
+                "updated_at": now_iso(),
+            }
+        )
+        if title:
+            self._upsert_meta_row(sid, "ai_title", title, seq=-1)
+
+        self.con.execute(
+            "INSERT INTO files(path, session_id, mtime_ns, size, parsed_offset, seq_end,"
+            " bad_lines, last_scan_at) VALUES(?,?,?,?,?,?,0,?) "
+            "ON CONFLICT(path) DO UPDATE SET mtime_ns=excluded.mtime_ns,"
+            " size=excluded.size, parsed_offset=excluded.parsed_offset,"
+            " seq_end=excluded.seq_end, last_scan_at=excluded.last_scan_at",
+            (vpath, sid, mtime_ns, len(s["rows"]), s["updated_at_raw"], len(s["rows"]), now_iso()),
+        )
 
     # ---------- 伴生目录 / 子 agent ----------
 

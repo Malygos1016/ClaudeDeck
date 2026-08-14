@@ -25,8 +25,10 @@ def cfg(tmp_path: Path) -> Config:
         data_dir=str(tmp_path / "data"),
         archive_quiet_minutes=15,
         config_path=str(tmp_path / "config.json"),
-        # 隔离:绝不让测试扫到真实 ~/.codex
+        # 隔离:绝不让测试扫到真实 ~/.codex、~/.pi 或 crush 名册
         codex_home=str(tmp_path / "codex_home"),
+        pi_home=str(tmp_path / "pi_home"),
+        crush_projects_json=str(tmp_path / "crush" / "projects.json"),
     )
 
 
