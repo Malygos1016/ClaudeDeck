@@ -26,7 +26,7 @@
   <section class="board-sec">
     <div class="sec-head">
       <h2 class="sec-title">运行中窗口</h2>
-      <span id="degraded" class="badge missing" hidden title="正常情况下,每张窗口卡要同时对上「进程号 + 进程出生时间」才算活着(防止 Windows 把死进程的号码发给无关新进程造成冒名)。现在这套严格核对在本机全部对不上号(多见于刚重启、或 CC 改了记录格式),已临时改用宽松判据:进程还在 + 状态戳新鲜。灯的可信度略降,一般几分钟内自行恢复。">宽松验活模式</span>
+      <span id="degraded" class="badge missing" hidden title="正常情况下,每张窗口卡要同时对上「进程号 + 进程出生时间」才认定还在运行(防止系统把旧号码发给无关的新进程造成认错)。这套精确核对暂时全部对不上号时(常见于刚开机),会切换到泛状态追踪:只看进程在不在、状态更新新不新鲜。灯的可信度略降,通常几分钟内自动恢复精确模式。">泛状态追踪模式</span>
       <label class="mono stale-toggle">
         <input type="checkbox" id="show-stale"> 显示失效条目(<span id="stale-count">0</span>)
       </label>

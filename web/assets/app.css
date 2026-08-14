@@ -37,6 +37,10 @@
 
 * { box-sizing: border-box; }
 html, body { margin: 0; padding: 0; }
+/* hidden 属性必须永远赢:否则任何设置了 display 的类(如 .badge 的 inline-flex)
+   都会把浏览器默认的 [hidden]{display:none} 顶掉——2026-08-13 真实踩坑。
+   唯一例外 .toast:它靠 [hidden]+opacity 保持占位做淡出动画 */
+[hidden]:not(.toast) { display: none !important; }
 
 /* 壁画:深空(顶)→星云→晚霞地平线(底)。只透过毛玻璃被看见 */
 html {
