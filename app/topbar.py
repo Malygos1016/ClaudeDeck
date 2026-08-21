@@ -97,6 +97,11 @@ def _put_tag(port: int, sid: str, tag: str) -> None:
 
 
 def main() -> None:
+    # pythonw + CREATE_NO_WINDOW 下 stdout/stderr 为 None,不重定向就无处喊冤
+    log = open(ROOT / "topbar.log", "a", encoding="utf-8", buffering=1)
+    sys.stdout = log
+    sys.stderr = log
+
     kernel32 = ctypes.windll.kernel32
     kernel32.CreateMutexW(None, False, "Local\\ClaudeDeckTopBar")
     if kernel32.GetLastError() == 183:  # ERROR_ALREADY_EXISTS
@@ -109,6 +114,89 @@ def main() -> None:
     from .config import Config
 
     cfg = Config.load()
+    if _run_webview(cfg):
+        return
+    print("webview 壳不可用,回退 tkinter 版")
+    _tk_main(cfg)
+
+
+def _run_webview(cfg) -> bool:
+    """WebView2 壳:顶栏本体是本服务的 /topbar.html(WebGL shader 背景+玻璃格子)。
+
+    WebView2 运行时缺失或 pythonnet 在本 Python 版本罢工时返回 False,
+    回退 tkinter 素版,功能不缺席。
+    """
+    try:
+        import webview
+    except Exception:
+        return False
+
+    user32 = ctypes.windll.user32
+    port = cfg.port
+    screen_w = user32.GetSystemMetrics(0)
+    try:
+        dpi = user32.GetDpiForSystem()
+    except Exception:
+        dpi = 96
+    bar_h = int(BAR_LOGICAL_H * dpi / 96)
+    state: dict = {"abd": None}
+
+    class Api:
+        def open_deck(self):
+            webbrowser.open(f"http://127.0.0.1:{port}/live.html")
+
+        def quit(self):
+            for w in list(webview.windows):
+                w.destroy()
+
+    def on_shown():
+        hwnd = user32.FindWindowW(None, "CCTopBar")
+        if not hwnd:
+            print("找不到 CCTopBar 窗口句柄,AppBar 未注册")
+            return
+        # 从任务栏隐藏(真挂件):加 TOOLWINDOW、去 APPWINDOW
+        GWL_EXSTYLE, WS_EX_TOOLWINDOW, WS_EX_APPWINDOW = -20, 0x00000080, 0x00040000
+        ex = user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
+        user32.SetWindowLongW(hwnd, GWL_EXSTYLE, (ex | WS_EX_TOOLWINDOW) & ~WS_EX_APPWINDOW)
+        abd = _appbar(hwnd, screen_w, bar_h)
+        state["abd"] = abd
+        # 强制压回 AppBar 矩形(物理像素;min_size 已放开,不会再被撑到 100px)
+        SWP_NOZORDER, SWP_NOACTIVATE, SWP_FRAMECHANGED = 0x0004, 0x0010, 0x0020
+        user32.SetWindowPos(
+            hwnd, 0, abd.rc.left, abd.rc.top,
+            abd.rc.right - abd.rc.left, abd.rc.bottom - abd.rc.top,
+            SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED,
+        )
+        rect = wt.RECT()
+        user32.GetWindowRect(hwnd, ctypes.byref(rect))
+        print(f"CCTopBar 窗口就位: {rect.left},{rect.top} {rect.right - rect.left}x{rect.bottom - rect.top}")
+
+    def on_closing():
+        if state["abd"] is not None:
+            _appbar_remove(state["abd"])
+            state["abd"] = None
+
+    try:
+        win = webview.create_window(
+            "CCTopBar",
+            url=f"http://127.0.0.1:{port}/topbar.html",
+            x=0, y=0, width=screen_w, height=bar_h,
+            min_size=(100, 10),  # 默认 (200,100) 会把 32px 的条强撑成 100px+(2026-08-21 实翻车)
+            frameless=True, on_top=True, easy_drag=False,
+            js_api=Api(), background_color="#0e1218",
+        )
+        win.events.shown += on_shown
+        win.events.closing += on_closing
+        webview.start()
+    except Exception as e:
+        print(f"webview 壳失败: {e!r}")
+        on_closing()
+        return False
+    on_closing()
+    return True
+
+
+def _tk_main(cfg) -> None:
     port = cfg.port
 
     import tkinter as tk

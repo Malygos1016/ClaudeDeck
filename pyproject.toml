@@ -12,6 +12,7 @@ dependencies = [
     "pystray>=0.19",
     "pillow>=10.0",
     "uiautomation>=2.0.29",
+    "pywebview>=6.2.1",
 ]
 
 [dependency-groups]

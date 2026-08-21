@@ -1,0 +1,193 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>CCTopBar</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; user-select: none; }
+  html, body { height: 100%; overflow: hidden; background: #0e1218; }
+  #gl { position: fixed; inset: 0; width: 100%; height: 100%; }
+  #bar {
+    position: fixed; inset: 0; display: flex; align-items: center; gap: 7px;
+    padding: 0 10px; font-family: "Microsoft YaHei UI", "Segoe UI", sans-serif;
+  }
+  #brand {
+    font-family: "Cascadia Code", Consolas, monospace; font-size: 11px;
+    color: #8d97a7; letter-spacing: 0.08em; cursor: pointer; flex: none;
+  }
+  #brand b { color: #e2a13c; }
+  .cell {
+    display: inline-flex; align-items: center; gap: 6px; flex: none;
+    font-size: 12px; color: #c9d2df; line-height: 1;
+    padding: 3px 10px; border-radius: 999px; cursor: pointer;
+    background: rgba(18, 24, 33, 0.62); border: 1px solid rgba(160, 180, 210, 0.13);
+    backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
+    box-shadow: inset 1px 1px 0 rgba(255, 255, 255, 0.06);
+    transition: border-color 0.15s ease, transform 0.15s ease;
+  }
+  .cell:hover { border-color: #e2a13c; transform: translateY(-1px); }
+  .cell.bg { border-style: dashed; opacity: 0.7; cursor: default; }
+  .cell.waiting {
+    border-color: rgba(217, 112, 96, 0.7); color: #f0d7d2;
+    animation: breathe 1.6s ease-in-out infinite;
+  }
+  @keyframes breathe { 50% { box-shadow: 0 0 12px rgba(217, 112, 96, 0.45); } }
+  .dot { width: 7px; height: 7px; border-radius: 50%; flex: none; }
+  .dot.busy { background: #e2a13c; box-shadow: 0 0 7px rgba(226, 161, 60, 0.8); }
+  .dot.waiting { background: #d97060; box-shadow: 0 0 7px rgba(217, 112, 96, 0.9); }
+  .dot.idle { background: #58b884; box-shadow: 0 0 5px rgba(88, 184, 132, 0.5); }
+  .empty { font-size: 11.5px; color: #6b7686; }
+  /* 右键菜单与就地改名 */
+  #menu, #editor {
+    position: fixed; z-index: 10; display: none;
+    background: rgba(18, 24, 33, 0.92); border: 1px solid rgba(160, 180, 210, 0.16);
+    border-radius: 8px; padding: 5px; backdrop-filter: blur(10px);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+  }
+  #menu .mi {
+    font-size: 12px; color: #c9d2df; padding: 5px 12px; border-radius: 5px;
+    cursor: pointer; white-space: nowrap;
+  }
+  #menu .mi:hover { background: rgba(226, 161, 60, 0.14); color: #e2a13c; }
+  #menu .sep { height: 1px; background: rgba(160, 180, 210, 0.12); margin: 4px 6px; }
+  #editor input {
+    width: 210px; font-size: 12.5px; color: #dbe2ec; padding: 5px 8px;
+    background: rgba(7, 16, 34, 0.7); border: 1px solid rgba(160, 180, 210, 0.2);
+    border-radius: 5px; outline: none; caret-color: #e2a13c;
+  }
+  #editor input:focus { border-color: #e2a13c; }
+</style>
+</head>
+<body>
+<canvas id="gl"></canvas>
+<div id="bar"><span id="brand">CC<b>·</b>Deck</span><span class="empty" id="cells">连接中…</span></div>
+<div id="menu"></div>
+<div id="editor"><input maxlength="60" placeholder="起个名字,留空=清除,回车保存"></div>
+<script>
+const $ = (id) => document.getElementById(id);
+
+/* ---------- GLSL 背景:暗色极光缓流 + 波点 ---------- */
+const canvas = $("gl");
+const gl = canvas.getContext("webgl", { antialias: false, alpha: false });
+if (gl) {
+  const VS = "attribute vec2 p;void main(){gl_Position=vec4(p,0.,1.);}";
+  const FS = `precision mediump float;uniform float t;uniform vec2 r;
+  void main(){
+    vec2 uv = gl_FragCoord.xy / r;
+    vec3 col = mix(vec3(0.050,0.066,0.090), vec3(0.066,0.086,0.118), uv.x);
+    float w = sin(uv.x*5.0 - t*0.22) * sin(uv.x*2.3 + t*0.13);
+    col += vec3(0.886,0.631,0.235) * smoothstep(0.55, 1.0, w) * 0.055;
+    col += vec3(0.247,0.573,0.827) * smoothstep(0.6, 1.0, -w) * 0.045;
+    vec2 g = fract(gl_FragCoord.xy / 14.0) - 0.5;
+    col += smoothstep(0.16, 0.05, length(g)) * 0.028;
+    col *= 1.0 - 0.35 * pow(abs(uv.y - 0.5) * 2.0, 2.0);
+    gl_FragColor = vec4(col, 1.0);
+  }`;
+  const sh = (type, src) => { const s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s); return s; };
+  const prog = gl.createProgram();
+  gl.attachShader(prog, sh(gl.VERTEX_SHADER, VS));
+  gl.attachShader(prog, sh(gl.FRAGMENT_SHADER, FS));
+  gl.linkProgram(prog); gl.useProgram(prog);
+  const buf = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1, 3,-1, -1,3]), gl.STATIC_DRAW);
+  const loc = gl.getAttribLocation(prog, "p");
+  gl.enableVertexAttribArray(loc); gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
+  const uT = gl.getUniformLocation(prog, "t"), uR = gl.getUniformLocation(prog, "r");
+  const draw = (ms) => {
+    if (canvas.width !== innerWidth || canvas.height !== innerHeight) {
+      canvas.width = innerWidth; canvas.height = innerHeight;
+      gl.viewport(0, 0, canvas.width, canvas.height);
+    }
+    gl.uniform1f(uT, ms / 1000); gl.uniform2f(uR, canvas.width, canvas.height);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+  };
+  let last = 0;
+  (function loop(ms) { if (ms - last > 50) { last = ms; draw(ms); } requestAnimationFrame(loop); })(0); // ~20fps 够流动且省 GPU
+}
+
+/* ---------- 数据与格子 ---------- */
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]));
+let lastSig = "";
+
+async function tick() {
+  let sessions = null;
+  try { sessions = (await (await fetch("/api/live")).json()).sessions; } catch {}
+  const sig = JSON.stringify(sessions);
+  if (sig !== lastSig) { lastSig = sig; render(sessions); }
+}
+
+function render(sessions) {
+  const host = $("cells");
+  if (!sessions) { host.outerHTML = '<span class="empty" id="cells">ClaudeDeck 服务未运行</span>'; return; }
+  if (!sessions.length) { host.outerHTML = '<span class="empty" id="cells">没有运行中的会话</span>'; return; }
+  const html = sessions.map((s) => {
+    const st = ["busy", "waiting", "idle"].includes(s.status) ? s.status : "idle";
+    const label = s.tag || s.name || (s.session_id || "?").slice(0, 8);
+    const cls = `cell${s.kind === "bg" ? " bg" : ""}${st === "waiting" ? " waiting" : ""}`;
+    return `<span class="${cls}" data-sid="${esc(s.session_id)}" data-bg="${s.kind === "bg" ? 1 : 0}"
+      data-label="${esc(label)}" data-tag="${esc(s.tag || "")}" title="${esc(s.cwd || "")}">
+      <span class="dot ${st}"></span>${esc(label)}</span>`;
+  }).join("");
+  host.outerHTML = `<span id="cells" style="display:flex;gap:7px;align-items:center;overflow:hidden">${html}</span>`;
+}
+tick(); setInterval(tick, 2000);
+
+const post = (url, body) => fetch(url, { method: body ? "PUT" : "POST",
+  headers: { "Content-Type": "application/json" }, body: JSON.stringify(body || {}) });
+
+document.addEventListener("click", (e) => {
+  hideMenus();
+  const cell = e.target.closest(".cell");
+  if (cell && cell.dataset.bg !== "1") post(`/api/live/${cell.dataset.sid}/focus`);
+});
+$("brand").addEventListener("click", () => window.pywebview?.api?.open_deck());
+
+/* ---------- 右键菜单 + 就地改名 ---------- */
+function hideMenus() { $("menu").style.display = "none"; $("editor").style.display = "none"; }
+
+document.addEventListener("contextmenu", (e) => {
+  e.preventDefault();
+  const cell = e.target.closest(".cell");
+  const m = $("menu");
+  const items = [];
+  if (cell) items.push(`<div class="mi" data-act="rename" data-sid="${cell.dataset.sid}" data-tag="${esc(cell.dataset.tag)}" data-label="${esc(cell.dataset.label)}">重命名「${esc(cell.dataset.label)}」…</div><div class="sep"></div>`);
+  items.push('<div class="mi" data-act="open">打开 ClaudeDeck</div>');
+  items.push('<div class="mi" data-act="quit">关闭 CCTopBar</div>');
+  m.innerHTML = items.join("");
+  m.style.display = "block";
+  m.style.left = `${Math.min(e.clientX, innerWidth - m.offsetWidth - 8)}px`;
+  m.style.top = `${Math.min(e.clientY, innerHeight - 4)}px`;
+});
+
+$("menu").addEventListener("click", (e) => {
+  const mi = e.target.closest(".mi");
+  if (!mi) return;
+  const act = mi.dataset.act;
+  hideMenus();
+  if (act === "open") window.pywebview?.api?.open_deck();
+  else if (act === "quit") window.pywebview?.api?.quit();
+  else if (act === "rename") openEditor(mi.dataset.sid, mi.dataset.tag, mi.dataset.label);
+  e.stopPropagation();
+});
+
+function openEditor(sid, cur, label) {
+  const ed = $("editor");
+  const input = ed.querySelector("input");
+  ed.style.display = "block";
+  ed.style.left = "120px"; ed.style.top = "2px";
+  input.value = cur || "";
+  input.placeholder = `重命名「${label}」,留空=清除`;
+  input.focus(); input.select();
+  input.onkeydown = async (e) => {
+    if (e.key === "Enter") {
+      const v = input.value; hideMenus();
+      await post(`/api/sessions/${sid}/tag`, { tag: v });
+      lastSig = ""; tick();
+    } else if (e.key === "Escape") hideMenus();
+  };
+}
+document.addEventListener("keydown", (e) => { if (e.key === "Escape") hideMenus(); });
+</script>
+</body>
+</html>

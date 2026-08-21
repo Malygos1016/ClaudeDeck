@@ -147,7 +147,7 @@ a:hover { text-decoration: underline; }
 
 /* 灯条铅笔:hover 该格时格子拉长露出 🖊 */
 .ann-edit {
-  width: 0; opacity: 0; overflow: hidden;
+  width: 0; min-width: 0; flex: none; opacity: 0; overflow: hidden;
   border: none; background: none; cursor: pointer;
   font-size: 11px; padding: 0; margin-left: 0;
   transition: width 0.18s ease, opacity 0.18s ease, margin-left 0.18s ease;
