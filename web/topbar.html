@@ -61,6 +61,9 @@ const S = {
   finaleAt: -1,       // 全绿转场启动时刻(shader 时间基),-1 = 无
   sweepEnd: 0.5,      // 转场触发瞬间的黄带右边界快照(绿条收卷的终点)
   redPulseAt: -1,     // 红带首现的红脉冲时刻
+  // 飞块独立通道:强度平滑(黄清零时 0.3s 淡出,方块原地飞完不瞬灭),
+  // 生成区间在黄存续期跟随色带、清零后冻结
+  sqInt: 0, sqB0: 0.05, sqB1: 0.1,
 };
 
 /* ================= GLSL:分区底色 + 黄区飞块 + 全绿转场 ================= */
@@ -72,6 +75,7 @@ if (gl) {
   const FS = `precision mediump float;
 uniform float t; uniform vec2 r;
 uniform float uLogo, uRed, uYel, uFadeEnd, uFinale, uSweepEnd, uRedPulse;
+uniform float uSq, uSqB0, uSqB1;
 
 float hash(float n) { return fract(sin(n) * 43758.5453); }
 
@@ -129,14 +133,14 @@ void main() {
   col = mix(col, yelC, wYel * 0.8);
 
   // 黄区飞块:生成时纵坐标随机抖动,ease-out 减速右飞,尾段减速时才渐隐;
-  // 转场触发后 0.4s 内存量方块淡出(几何切到快照带),不瞬灭
+  // 强度 uSq 独立于带宽平滑(黄清零→0.3s 原地淡出),几何用冻结区间 uSqB0/B1,
+  // 任何转换(转红/转绿/finale)方块都不瞬灭
   float finT = (uFinale >= 0.0) ? (t - uFinale) : -1.0;
-  bool sqOn = uYel > 0.001 || (finT >= 0.0 && finT < 0.4);
-  if (sqOn) {
+  if (uSq > 0.01) {
     float hs = clamp(r.y * 0.16, 4.0, 9.0); // 方块半边长(物理像素)
-    float b0 = (uYel > 0.001) ? max(rw, uLogo) : uLogo;
-    float b1 = (uYel > 0.001) ? yw : uSweepEnd;
-    float aScale = (uYel > 0.001) ? 1.0 : (1.0 - finT / 0.4);
+    float b0 = uSqB0;
+    float b1 = uSqB1;
+    float aScale = uSq;
     for (int i = 0; i < 9; i++) {
       float fi = float(i);
       float period = 1.4 + hash(fi * 7.13) * 1.3;
@@ -203,7 +207,8 @@ void main() {
   const loc = gl.getAttribLocation(prog, "p");
   gl.enableVertexAttribArray(loc); gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
   uniforms = Object.fromEntries(
-    ["t", "r", "uLogo", "uRed", "uYel", "uFadeEnd", "uFinale", "uSweepEnd", "uRedPulse"]
+    ["t", "r", "uLogo", "uRed", "uYel", "uFadeEnd", "uFinale", "uSweepEnd", "uRedPulse",
+     "uSq", "uSqB0", "uSqB1"]
       .map((n) => [n, gl.getUniformLocation(prog, n)])
   );
   let last = 0, lastDraw = 0;
@@ -214,7 +219,7 @@ void main() {
       S.redFrac > 0.001 || S.yelFrac > 0.001 ||
       S.dispRed > 0.004 || S.dispYel > 0.004 ||
       Math.abs(S.dispFade - S.fadeEnd) > 0.005 ||
-      S.finaleAt >= 0 || S.redPulseAt >= 0;
+      S.sqInt > 0.01 || S.finaleAt >= 0 || S.redPulseAt >= 0;
     if (ms - last >= (animating ? 0 : 200)) {
       last = ms;
       const dt = Math.min((ms - lastDraw) / 1000 || 0.033, 0.25);
@@ -224,6 +229,14 @@ void main() {
       S.dispRed += (S.redFrac - S.dispRed) * k;
       S.dispYel += (S.yelFrac - S.dispYel) * k;
       S.dispFade += (S.fadeEnd - S.dispFade) * k;
+      // 飞块强度独立淡入淡出(τ=0.3s);生成区间仅在黄存续期更新,清零后冻结
+      const k2 = 1 - Math.exp(-dt / 0.3);
+      S.sqInt += ((S.yelFrac > 0.001 ? 1 : 0) - S.sqInt) * k2;
+      if (S.yelFrac > 0.001) {
+        const span = 1 - S.logoFrac;
+        S.sqB0 = Math.max(S.logoFrac, S.logoFrac + S.dispRed * span);
+        S.sqB1 = Math.max(S.sqB0 + 0.02, S.logoFrac + (S.dispRed + S.dispYel) * span);
+      }
       if (canvas.width !== innerWidth || canvas.height !== innerHeight) {
         canvas.width = innerWidth; canvas.height = innerHeight;
         gl.viewport(0, 0, canvas.width, canvas.height);
@@ -240,6 +253,9 @@ void main() {
       gl.uniform1f(uniforms.uFinale, S.finaleAt);
       gl.uniform1f(uniforms.uSweepEnd, S.sweepEnd);
       gl.uniform1f(uniforms.uRedPulse, S.redPulseAt);
+      gl.uniform1f(uniforms.uSq, S.sqInt);
+      gl.uniform1f(uniforms.uSqB0, S.sqB0);
+      gl.uniform1f(uniforms.uSqB1, S.sqB1);
       gl.drawArrays(gl.TRIANGLES, 0, 3);
     }
     requestAnimationFrame(loop);
