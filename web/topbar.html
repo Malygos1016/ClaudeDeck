@@ -12,17 +12,6 @@
     display: flex; align-items: center; gap: 7px;
     padding: 0 10px; font-family: "Microsoft YaHei UI", "Segoe UI", sans-serif;
   }
-  /* 抽屉层本身透明(原生窗口按 panel 矩形做区域裁剪,只有卡片可见) */
-  #drawer {
-    position: fixed; top: var(--barh, 26px); left: 0; right: 0; bottom: 0;
-    display: none; align-items: flex-start;
-    font-family: "Microsoft YaHei UI", "Segoe UI", sans-serif;
-  }
-  #drawer .panel {
-    padding: 6px; margin-top: 2px; width: max-content;
-    background: rgba(13, 17, 24, 0.97);
-    border: 1px solid rgba(160, 180, 210, 0.18); border-radius: 10px;
-  }
   #brand {
     font-family: "Cascadia Code", Consolas, monospace; font-size: 11px;
     color: #8d97a7; letter-spacing: 0.08em; cursor: pointer; flex: none;
@@ -50,33 +39,18 @@
   .dot.waiting { background: #d97060; box-shadow: 0 0 7px rgba(217, 112, 96, 0.9); }
   .dot.idle { background: #58b884; box-shadow: 0 0 5px rgba(88, 184, 132, 0.5); }
   .empty { font-size: 11.5px; color: #6b7686; }
-  .mi {
-    font-size: 12.5px; color: #c9d2df; padding: 6px 14px; border-radius: 6px;
-    cursor: pointer; white-space: nowrap;
-  }
-  .mi:hover { background: rgba(226, 161, 60, 0.14); color: #e2a13c; }
-  .sep { height: 1px; background: rgba(160, 180, 210, 0.12); margin: 4px 6px; }
-  #drawer input {
-    width: 240px; font-size: 12.5px; color: #dbe2ec; padding: 6px 9px;
-    background: rgba(7, 16, 34, 0.7); border: 1px solid rgba(160, 180, 210, 0.2);
-    border-radius: 6px; outline: none; caret-color: #e2a13c;
-  }
-  #drawer input:focus { border-color: #e2a13c; }
-  #drawer .hint { font-size: 11px; color: #6b7686; margin-top: 5px; }
 </style>
 </head>
 <body>
 <canvas id="gl"></canvas>
 <div id="bar"><span id="brand">CC<b>·</b>Deck</span><span class="empty" id="cells">连接中…</span></div>
-<div id="drawer"><div class="panel"></div></div>
 <script>
 const $ = (id) => document.getElementById(id);
 // 条的逻辑高度 = 窗口收起时的内高。不能一次性快照:WebView2 里页面在窗体
 // 缩到最终 32px 之前就加载了(实翻车:条被定位到不可见的下方)。
 // 改为随 resize 动态同步,抽屉展开期间冻结。
-let drawerOpen = false;
 function syncBarH() {
-  if (!drawerOpen) document.documentElement.style.setProperty("--barh", `${window.innerHeight}px`);
+  document.documentElement.style.setProperty("--barh", `${window.innerHeight}px`);
 }
 window.addEventListener("resize", syncBarH);
 syncBarH();
@@ -152,78 +126,21 @@ const post = (url, body) => fetch(url, { method: body ? "PUT" : "POST",
   headers: { "Content-Type": "application/json" }, body: JSON.stringify(body || {}) });
 
 document.addEventListener("click", (e) => {
-  if (e.target.closest("#drawer")) return; // 抽屉内点击由抽屉自理
-  closeDrawer();
   const cell = e.target.closest(".cell");
   if (cell && cell.dataset.bg !== "1") post(`/api/live/${cell.dataset.sid}/focus`);
 });
 $("brand").addEventListener("click", () => window.pywebview?.api?.open_deck());
 
-/* ---------- 抽屉:右键菜单 + 就地改名(窗口只有 32px,靠 api.expand 弹性加高容纳) ---------- */
-const drawer = $("drawer");
-const panel = drawer.querySelector(".panel");
-
-function openDrawer(html, hLogical, anchorX) {
-  drawerOpen = true;
-  panel.innerHTML = html;
-  drawer.style.display = "flex";
-  panel.style.marginLeft = `${Math.max(4, Math.min((anchorX ?? 20) - 20, innerWidth - 300))}px`;
-  const r = panel.getBoundingClientRect();
-  window.pywebview?.api?.expand(hLogical, r.left, r.top, r.width, r.height);
-}
-
-function closeDrawer() {
-  if (drawer.style.display === "none" || !drawer.style.display) return;
-  drawer.style.display = "none";
-  panel.innerHTML = "";
-  drawerOpen = false;
-  window.pywebview?.api?.collapse();
-  syncBarH();
-}
-
+/* ---------- 右键菜单:独立小弹窗窗口(主条永远 32px,不再加高) ---------- */
 document.addEventListener("contextmenu", (e) => {
   e.preventDefault();
   const cell = e.target.closest(".cell");
-  const items = [];
-  if (cell) items.push(`<div class="mi" data-act="rename" data-sid="${cell.dataset.sid}" data-tag="${esc(cell.dataset.tag)}" data-label="${esc(cell.dataset.label)}">🖊 重命名「${esc(cell.dataset.label)}」…</div><div class="sep"></div>`);
-  items.push('<div class="mi" data-act="open">打开 ClaudeDeck</div>');
-  items.push('<div class="mi" data-act="quit">关闭 CCTopBar</div>');
-  openDrawer(items.join(""), 170, e.clientX);
-});
-
-drawer.addEventListener("click", async (e) => {
-  const mi = e.target.closest(".mi");
-  if (!mi) { if (!e.target.closest("input")) closeDrawer(); return; }
-  const act = mi.dataset.act;
-  if (act === "open") { closeDrawer(); window.pywebview?.api?.open_deck(); }
-  else if (act === "quit") { window.pywebview?.api?.quit(); }
-  else if (act === "rename") openEditor(mi.dataset.sid, mi.dataset.tag, mi.dataset.label);
-});
-
-function openEditor(sid, cur, label) {
-  const anchorX = parseFloat(panel.style.marginLeft || "20") + 20;
-  openDrawer(
-    `<input maxlength="60" value="${esc(cur || "")}" placeholder="重命名「${esc(label)}」,留空=清除">
-     <div class="hint">回车保存 · Esc 取消</div>`,
-    130, anchorX
+  window.pywebview?.api?.menu(
+    cell ? cell.dataset.sid : null,
+    cell ? cell.dataset.label : null,
+    cell ? cell.dataset.tag : null,
+    e.clientX
   );
-  const input = panel.querySelector("input");
-  input.focus(); input.select();
-  input.onkeydown = async (e) => {
-    if (e.key === "Enter") {
-      const v = input.value;
-      closeDrawer();
-      await post(`/api/sessions/${sid}/tag`, { tag: v });
-      lastSig = ""; tick();
-    } else if (e.key === "Escape") closeDrawer();
-  };
-}
-
-document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeDrawer(); });
-// 点到别的应用抽屉自动收;防抖复核——SetWindowRgn 等原生操作会造成一瞬的
-// 焦点抖动,立即关会让抽屉根本开不起来
-window.addEventListener("blur", () => {
-  setTimeout(() => { if (!document.hasFocus()) closeDrawer(); }, 250);
 });
 
 </script>

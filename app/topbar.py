@@ -141,29 +141,12 @@ def _run_webview(cfg) -> bool:
     bar_h = int(BAR_LOGICAL_H * dpi / 96)
     state: dict = {"abd": None}
 
-    def _set_height(h_phys: int) -> None:
-        hwnd = state.get("hwnd")
-        if not hwnd:
-            return
-        SWP_NOZORDER, SWP_NOACTIVATE = 0x0004, 0x0010
-        user32.SetWindowPos(hwnd, 0, 0, 0, screen_w, h_phys, SWP_NOZORDER | SWP_NOACTIVATE)
+    # 菜单是独立小窗口:主条永远 32px。此前的"加高+SetWindowRgn 裁剪"方案已废——
+    # WebView2 走 DirectComposition,区域裁剪对渲染无效,表现为全宽黑带(用户实报)。
+    MENU_W, MENU_H = 300, 152  # 逻辑像素
 
-    def _apply_region(card_phys: tuple[int, int, int, int] | None) -> None:
-        """可见区域 = 顶条 ∪ 菜单卡片;其余像素透明且点击穿透。
-
-        None = 只留顶条(收起态复位)。SetWindowRgn 后系统接管 region 句柄,不可 Delete。
-        """
-        hwnd = state.get("hwnd")
-        if not hwnd:
-            return
-        gdi32 = ctypes.windll.gdi32
-        rgn = gdi32.CreateRectRgn(0, 0, screen_w, bar_h)
-        if card_phys is not None:
-            x, y, w, h = card_phys
-            card = gdi32.CreateRoundRectRgn(x, y, x + w + 1, y + h + 1, 12, 12)
-            gdi32.CombineRgn(rgn, rgn, card, 2)  # RGN_OR
-            gdi32.DeleteObject(card)
-        user32.SetWindowRgn(hwnd, rgn, True)
+    def _menu_hwnd() -> int:
+        return user32.FindWindowW(None, "CCTopBarMenu")
 
     class Api:
         def open_deck(self):
@@ -173,18 +156,40 @@ def _run_webview(cfg) -> bool:
             for w in list(webview.windows):
                 w.destroy()
 
-        # 抽屉机制:菜单/改名框超出 32px 条 → 加高窗口 + 区域裁剪成"条+小卡片"
-        # (AppBar 占位始终 32px;卡片外像素不可见且点击穿透,不再是全宽黑带)
-        def expand(self, h_logical, x, y, w, h):
+        def menu(self, sid, label, tag, anchor_x_logical):
+            """右键弹出:定位并显示菜单窗口,注入上下文。"""
+            mw = state.get("menu_win")
+            hwnd = _menu_hwnd()
+            if mw is None or not hwnd:
+                return
             k = dpi / 96
-            print(f"expand h={h_logical} card=({x:.0f},{y:.0f},{w:.0f},{h:.0f})")
-            _set_height(int(float(h_logical) * k))
-            _apply_region((int(x * k), int(y * k), int(w * k), int(h * k)))
+            # move() 收逻辑像素(内部自乘 DPI,实测),全程逻辑坐标计算
+            x = int(max(0, min(float(anchor_x_logical) - 16, screen_w / k - MENU_W - 4)))
+            GWL_EXSTYLE, WS_EX_TOOLWINDOW, WS_EX_APPWINDOW = -20, 0x00000080, 0x00040000
+            ex = user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
+            user32.SetWindowLongW(hwnd, GWL_EXSTYLE, (ex | WS_EX_TOOLWINDOW) & ~WS_EX_APPWINDOW)
+            payload = json.dumps(
+                {"sid": sid, "label": label, "tag": tag}, ensure_ascii=False
+            )
+            mw.evaluate_js(f"showMenu({payload})")
+            # 定位/显示走 pywebview 自己的调用(同一 GUI 线程队列,保序);
+            # 直接 SetWindowPos 会与异步的 show() 竞态,表现为永远停在创建位置
+            mw.move(x, BAR_LOGICAL_H + 2)
+            mw.show()
 
-        def collapse(self):
-            print("collapse")
-            _apply_region(None)
-            _set_height(bar_h)
+            def _front():
+                h2 = _menu_hwnd()
+                if h2:
+                    user32.SetForegroundWindow(h2)
+
+            threading.Timer(0.15, _front).start()
+            print(f"menu sid={sid} x={x}")
+
+        def hide_menu(self):
+            print("hide_menu")
+            mw = state.get("menu_win")
+            if mw is not None:
+                mw.hide()
 
     def on_shown():
         hwnd = user32.FindWindowW(None, "CCTopBar")
@@ -224,16 +229,35 @@ def _run_webview(cfg) -> bool:
             state["abd"] = None
 
     try:
+        api = Api()
         win = webview.create_window(
             "CCTopBar",
             url=f"http://127.0.0.1:{port}/topbar.html",
             x=0, y=0, width=screen_w, height=bar_h,
             min_size=(100, 10),  # 默认 (200,100) 会把 32px 的条强撑成 100px+(2026-08-21 实翻车)
             frameless=True, on_top=True, easy_drag=False,
-            js_api=Api(), background_color="#0e1218",
+            js_api=api, background_color="#0e1218",
+        )
+        state["menu_win"] = webview.create_window(
+            "CCTopBarMenu",
+            url=f"http://127.0.0.1:{port}/topbar_menu.html",
+            x=0, y=bar_h, width=MENU_W, height=MENU_H,
+            min_size=(100, 10), frameless=True, on_top=True,
+            hidden=True, js_api=api, background_color="#10151d",
         )
         win.events.shown += on_shown
         win.events.closing += on_closing
+
+        def _probe():
+            try:
+                print("bar api keys:", win.evaluate_js(
+                    "window.pywebview && window.pywebview.api ? Object.keys(window.pywebview.api).join(',') : '(无 api)'"
+                ))
+                print("menu 页 showMenu:", state["menu_win"].evaluate_js("typeof showMenu"))
+            except Exception as e:
+                print(f"probe err: {e!r}")
+
+        threading.Timer(6.0, _probe).start()
         webview.start()
     except Exception as e:
         print(f"webview 壳失败: {e!r}")

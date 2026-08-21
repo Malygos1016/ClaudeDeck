@@ -5,3 +5,38 @@ CCTopBar 窗口就位: 0,0 2560x32
 CCTopBar 窗口就位: 0,0 2560x32
 expand h=170 card=(84,28,227,107)
 collapse
+expand h=170 card=(366,28,190,107)
+expand h=170 card=(366,28,190,107)
+collapse
+expand h=170 card=(300,28,187,107)
+collapse
+CCTopBar 窗口就位: 0,0 2560x32
+menu sid=023dfe51-0369-4977-93fe-b35fd7e138ad x=768
+menu sid=9016d3ac-7ffa-4cce-91df-2c31e92a043c x=637
+CCTopBar 窗口就位: 0,0 2560x32
+menu sid=023dfe51-0369-4977-93fe-b35fd7e138ad x=850
+bar api keys: hide_menu,menu,open_deck,quit
+menu 页 showMenu: function
+menu sid=bf927260-4bca-4cb3-afed-6f5aecd0a876 x=110
+menu sid=023dfe51-0369-4977-93fe-b35fd7e138ad x=831
+menu sid=bf927260-4bca-4cb3-afed-6f5aecd0a876 x=116
+menu sid=2d304f24-4820-43c8-9857-90f225e72321 x=265
+CCTopBar 窗口就位: 0,0 2560x32
+bar api keys: hide_menu,menu,open_deck,quit
+menu 页 showMenu: function
+menu sid=None x=697
+menu sid=9016d3ac-7ffa-4cce-91df-2c31e92a043c x=685
+menu sid=023dfe51-0369-4977-93fe-b35fd7e138ad x=830
+CCTopBar 窗口就位: 0,0 2560x32
+bar api keys: hide_menu,menu,open_deck,quit
+menu 页 showMenu: function
+menu sid=9016d3ac-7ffa-4cce-91df-2c31e92a043c x=680
+CCTopBar 窗口就位: 0,0 2560x32
+bar api keys: hide_menu,menu,open_deck,quit
+menu 页 showMenu: function
+menu sid=9016d3ac-7ffa-4cce-91df-2c31e92a043c x=544
+menu sid=023dfe51-0369-4977-93fe-b35fd7e138ad x=668
+menu sid=023dfe51-0369-4977-93fe-b35fd7e138ad x=584
+menu sid=9016d3ac-7ffa-4cce-91df-2c31e92a043c x=534
+menu sid=f408d45f-662e-4dba-a9e9-587dabadb35c x=400
+menu sid=023dfe51-0369-4977-93fe-b35fd7e138ad x=666

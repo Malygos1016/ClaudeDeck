@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>CCTopBarMenu</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; user-select: none; }
+  html, body { height: 100%; overflow: hidden; }
+  body {
+    background: #10151d; padding: 6px;
+    font-family: "Microsoft YaHei UI", "Segoe UI", sans-serif;
+    border: 1px solid rgba(160, 180, 210, 0.2);
+  }
+  .mi {
+    font-size: 12.5px; color: #c9d2df; padding: 7px 14px; border-radius: 6px;
+    cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .mi:hover { background: rgba(226, 161, 60, 0.14); color: #e2a13c; }
+  .sep { height: 1px; background: rgba(160, 180, 210, 0.12); margin: 4px 6px; }
+  input {
+    width: 100%; font-size: 12.5px; color: #dbe2ec; padding: 7px 9px;
+    background: rgba(7, 16, 34, 0.7); border: 1px solid rgba(160, 180, 210, 0.2);
+    border-radius: 6px; outline: none; caret-color: #e2a13c;
+    font-family: inherit;
+  }
+  input:focus { border-color: #e2a13c; }
+  .hint { font-size: 11px; color: #6b7686; margin: 6px 2px 0; }
+</style>
+</head>
+<body>
+<div id="box"></div>
+<script>
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]));
+const box = document.getElementById("box");
+let ctx = null; // {sid, label, tag}
+let shownAt = 0; // 展示时间戳:show 过程的焦点抖动不触发自藏
+
+function hide() { window.pywebview?.api?.hide_menu(); }
+
+// 由 Python 在弹出时注入调用
+function showMenu(payload) {
+  ctx = payload;
+  shownAt = Date.now();
+  const items = [];
+  if (ctx && ctx.sid) {
+    items.push(`<div class="mi" data-act="rename">🖊 重命名「${esc(ctx.label)}」…</div><div class="sep"></div>`);
+  }
+  items.push('<div class="mi" data-act="open">打开 ClaudeDeck</div>');
+  items.push('<div class="mi" data-act="quit">关闭 CCTopBar</div>');
+  box.innerHTML = items.join("");
+}
+
+function showEditor() {
+  box.innerHTML = `<input maxlength="60" value="${esc(ctx.tag || "")}" placeholder="重命名「${esc(ctx.label)}」,留空=清除">
+    <div class="hint">回车保存 · Esc 取消</div>`;
+  const input = box.querySelector("input");
+  input.focus(); input.select();
+  input.onkeydown = async (e) => {
+    if (e.key === "Enter") {
+      const v = input.value;
+      try {
+        await fetch(`http://127.0.0.1:${location.port || 8737}/api/sessions/${ctx.sid}/tag`, {
+          method: "PUT", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ tag: v }),
+        });
+      } finally { hide(); }
+    } else if (e.key === "Escape") hide();
+  };
+}
+
+box.addEventListener("click", (e) => {
+  const mi = e.target.closest(".mi");
+  if (!mi) return;
+  const act = mi.dataset.act;
+  if (act === "open") { hide(); window.pywebview?.api?.open_deck(); }
+  else if (act === "quit") { window.pywebview?.api?.quit(); }
+  else if (act === "rename") showEditor();
+});
+
+document.addEventListener("keydown", (e) => { if (e.key === "Escape") hide(); });
+document.addEventListener("contextmenu", (e) => e.preventDefault());
+// 失焦自动隐藏;展示后 600ms 宽限(show/定位过程的焦点抖动不算数)
+window.addEventListener("blur", () => {
+  setTimeout(() => {
+    if (!document.hasFocus() && Date.now() - shownAt > 600) hide();
+  }, 250);
+});
+</script>
+</body>
+</html>
