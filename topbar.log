@@ -48,3 +48,6 @@ hide_menu
 hide_menu
 menu sid=023dfe51-0369-4977-93fe-b35fd7e138ad x=652
 hide_menu
+CCTopBar 窗口就位: 0,0 2560x32
+bar api keys: hide_menu,menu,open_deck,quit,set_rows
+menu 页 showMenu: function

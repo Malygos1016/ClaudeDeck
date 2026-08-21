@@ -88,23 +88,20 @@ void main() {
   vec3 yelC = vec3(0.40, 0.28, 0.07);   // 黄区底色(暗琥珀)
 
   float span = max(1.0 - uLogo, 0.001);
-  float xx = (uv.x - uLogo) / span;     // logo 之后的归一化横坐标
   float tr = 0.025;                      // 过渡半宽(前后合计约 5%)
-  float redEnd = uRed;
-  float yelEnd = uRed + uYel;
-
-  if (xx < 0.0) {
-    // logo 区:无条件继承最高优先级颜色
-    if (uRed > 0.001)      col = mix(col, redC, 0.8);
-    else if (uYel > 0.001) col = mix(col, yelC, 0.8);
-  } else {
-    float wRed = (uRed > 0.001) ? (1.0 - smoothstep(redEnd - tr, redEnd + tr, xx)) : 0.0;
-    float wYel = (uYel > 0.001)
-      ? smoothstep(redEnd - tr, redEnd + tr, xx) * (1.0 - smoothstep(yelEnd - tr, yelEnd + tr, xx))
-      : 0.0;
-    col = mix(col, redC, wRed * 0.8);
-    col = mix(col, yelC, wYel * 0.8);
+  // 首个有色带从 x=0 直接铺过 logo 区(无接缝):红带含 logo;无红时黄带含 logo
+  float rw = (uRed > 0.001) ? uLogo + uRed * span : 0.0;   // 红带右边界
+  float yw = (uYel > 0.001)
+    ? ((uRed > 0.001) ? rw + uYel * span : uLogo + uYel * span)
+    : rw;                                                   // 黄带右边界
+  float wRed = (uRed > 0.001) ? (1.0 - smoothstep(rw - tr, rw + tr, uv.x)) : 0.0;
+  float wYel = 0.0;
+  if (uYel > 0.001) {
+    float startEdge = (uRed > 0.001) ? smoothstep(rw - tr, rw + tr, uv.x) : 1.0;
+    wYel = startEdge * (1.0 - smoothstep(yw - tr, yw + tr, uv.x));
   }
+  col = mix(col, redC, wRed * 0.8);
+  col = mix(col, yelC, wYel * 0.8);
 
   // 黄区飞块:暗黄方块,生成时纵坐标随机抖动,水平直线右飞,向 uFadeEnd 渐隐
   if (uYel > 0.001) {
@@ -115,7 +112,8 @@ void main() {
       float phase = t / period + hash(fi * 3.31);
       float cyc = fract(phase);
       float gen = floor(phase);
-      float x0 = uLogo + (uRed + hash(fi * 5.77 + gen * 1.13) * uYel) * span;
+      float bandStart = max(rw, uLogo);   // 黄带内随机起点(避开 logo 文字区)
+      float x0 = bandStart + hash(fi * 5.77 + gen * 1.13) * max(yw - bandStart, 0.02);
       float px = mix(x0, uFadeEnd, cyc);
       float py = 0.22 + 0.56 * hash(fi * 9.21 + gen * 2.71);
       vec2 d = abs(vec2((uv.x - px) * r.x, (uv.y - py) * r.y));
