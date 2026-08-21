@@ -84,6 +84,7 @@ Claude Code 默认删除 30 天无活动的会话记录(改 `cleanupPeriodDays` 
 ## 托盘、自启与配置
 
 - **托盘**:`start_claudedeck.bat` 无窗启动;重复双击不会起第二份服务(单实例保护,只帮你开个浏览器页)。退出走托盘右键。
+- **CCTopBar 桌面顶栏**:默认开启,随托盘自动出现在主屏顶端(AppBar 占位,最大化窗口自动让位)。左键格子聚焦对应终端标签,右键格子重命名,右键空白处可关闭;托盘菜单"CCTopBar 顶栏"可开关(记忆在 `config.json` 的 `topbar_enabled`)。
 - **开机自启**:项目目录 PowerShell 跑 `.\autostart.ps1 -Enable`(计划任务,登录时静默拉起);`-Disable` 移除,`-Status` 查看。
 - **配置**:设置页可改,或直接编辑项目根 `config.json`:
 

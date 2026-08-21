@@ -39,7 +39,7 @@ class Config:
     )
     index_thinking: bool = False
     index_tool_results: bool = False
-    topbar_enabled: bool = False  # CCTopBar 桌面顶端常驻条,托盘菜单开关
+    topbar_enabled: bool = True  # CCTopBar 桌面顶端常驻条,默认开启;托盘菜单可关
     # 本配置文件自身的位置(save 写回处;测试用临时路径隔离,不污染真实 config.json)
     config_path: str = field(default_factory=lambda: str(DEFAULT_CONFIG_PATH))
 
