@@ -81,6 +81,20 @@ float sdRoundBox(vec2 p, vec2 b, float rad) {
   return length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - rad;
 }
 
+// 绿条飞行曲线:三段连续(快起减速→匀速→缓动到停),段间速度连续无停顿
+// u∈[0,1] 归一化时间 → 归一化路程;u1/u2 为段界,v 为巡航速度(由总路程=1 解出)
+float flightP(float u) {
+  float u1 = 0.22, u2 = 0.78;
+  float v = 1.0 / (1.75 * u1 + (u2 - u1) + 0.5 * (1.0 - u2));
+  float v0 = 2.5 * v;                       // 起始速度(快起)
+  if (u < u1) return v0 * u + (v - v0) * u * u / (2.0 * u1);
+  float s1 = u1 * (v0 + v) * 0.5;
+  if (u < u2) return s1 + v * (u - u1);
+  float s2 = s1 + v * (u2 - u1);
+  float w = u - u2;
+  return s2 + v * w - v * w * w / (2.0 * (1.0 - u2));
+}
+
 vec3 darkBase(vec2 uv) {
   vec3 col = mix(vec3(0.050,0.066,0.090), vec3(0.066,0.086,0.118), uv.x);
   float w = sin(uv.x*5.0 - t*0.22) * sin(uv.x*2.3 + t*0.13);
@@ -143,16 +157,13 @@ void main() {
   // → 扫尽后独自滑到最右停留 → 整条闪绿 → 回深色
   if (finT >= 0.0) {
     float pxBar;
-    if (finT < 0.9) {
-      float p = 1.0 - pow(1.0 - clamp(finT / 0.9, 0.0, 1.0), 3.0);
-      pxBar = mix(0.008, uSweepEnd, p);
+    if (finT < 1.55) {
+      // 单一连续飞行 0.008→0.992:三段速度曲线,途中扫过黄带快照
+      pxBar = mix(0.008, 0.992, flightP(clamp(finT / 1.55, 0.0, 1.0)));
       float edge = 2.0 / r.x;   // 收卷前沿(约 2px 利落切边)
       float wKeep = smoothstep(pxBar, pxBar + edge, uv.x)
                   * (1.0 - smoothstep(uSweepEnd - tr, uSweepEnd + tr, uv.x));
-      col = mix(col, yelC, wKeep * 0.8);
-    } else if (finT < 1.55) {
-      float p = 1.0 - pow(1.0 - clamp((finT - 0.9) / 0.65, 0.0, 1.0), 3.0);
-      pxBar = mix(uSweepEnd, 0.992, p);
+      col = mix(col, yelC, wKeep * 0.8);  // 绿条越过快照末端后此窗口自然清空
     } else {
       pxBar = 0.992;            // 右端停留
     }
