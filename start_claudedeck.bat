@@ -1,9 +1,29 @@
 @echo off
-rem ClaudeDeck tray launcher (pure ASCII). Server runs hidden; look for the amber icon in the system tray.
+rem ClaudeDeck launcher (pure ASCII). Server runs hidden; look for the amber icon in the system tray.
+rem First run bootstraps the venv automatically (needs uv: https://docs.astral.sh/uv/).
 cd /d %~dp0
-if not exist .venv\Scripts\pythonw.exe (
-  echo [ClaudeDeck] venv missing. Run install.bat first.
+if exist .venv\Scripts\pythonw.exe goto run
+
+echo [ClaudeDeck] First run: creating venv and installing deps (about 1 minute)...
+where uv >nul 2>nul
+if errorlevel 1 (
+  echo [ClaudeDeck] uv not found in PATH. Install uv first: https://docs.astral.sh/uv/
   pause
   exit /b 1
 )
+uv venv --python 3.14
+if errorlevel 1 (
+  echo [ClaudeDeck] venv creation failed, see output above.
+  pause
+  exit /b 1
+)
+uv sync
+if errorlevel 1 (
+  echo [ClaudeDeck] dependency install failed, see output above.
+  pause
+  exit /b 1
+)
+echo [ClaudeDeck] Install done. Note: first launch may take up to 1 minute (AV scan on new venv).
+
+:run
 start "" .venv\Scripts\pythonw.exe -m app.tray

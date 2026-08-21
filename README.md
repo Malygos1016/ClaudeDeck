@@ -40,11 +40,10 @@ ClaudeDeck 是一个跑在本机的 Claude Code 会话管理界面。它解决�
 ```bat
 git clone https://github.com/Malygos1016/ClaudeDeck.git
 cd ClaudeDeck
-install.bat            :: uv venv + 依赖,全部装在项目内
-start_claudedeck.bat   :: 无窗启动,右下角出现琥珀色托盘图标
+start_claudedeck.bat   :: 首跑自动装环境(项目内 venv),之后无窗启动,右下角出现琥珀托盘图标
 ```
 
-浏览器打开 **http://127.0.0.1:8737**(双击托盘图标同效)。首次索引全量扫描,视历史体量约数秒到一两分钟。
+浏览器打开 **http://127.0.0.1:8737**(双击托盘图标同效)。首跑会出现一个安装进度窗口,装完自动转入无窗托盘模式;首次索引全量扫描,视历史体量约数秒到一两分钟。(`install.bat` 仍保留,想单独装环境时用。)
 
 可选开机自启:
 
