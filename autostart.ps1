@@ -11,8 +11,12 @@ $Root = $PSScriptRoot
 $Pythonw = Join-Path $Root ".venv\Scripts\pythonw.exe"
 
 if ($Enable) {
-    if (-not (Test-Path $Pythonw)) { throw "venv 不存在,先跑 install.bat" }
-    $action = New-ScheduledTaskAction -Execute $Pythonw -Argument "-m app.tray" -WorkingDirectory $Root
+    if (-not (Test-Path $Pythonw)) { throw "venv 不存在,先跑一次 start_claudedeck.bat" }
+    # 不直接执行 pythonw:部分 uv 版本的 venv 垫片是控制台子系统,会带出黑窗。
+    # 统一用 Start-Process -WindowStyle Hidden 包一层,两种垫片都无窗。
+    $inner = "Start-Process -WindowStyle Hidden -FilePath '$Pythonw' -ArgumentList '-m','app.tray' -WorkingDirectory '$Root'"
+    $action = New-ScheduledTaskAction -Execute "powershell.exe" `
+        -Argument "-NoProfile -WindowStyle Hidden -Command `"$inner`"" -WorkingDirectory $Root
     $trigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
     $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
         -ExecutionTimeLimit ([TimeSpan]::Zero) -StartWhenAvailable

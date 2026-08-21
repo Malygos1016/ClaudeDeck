@@ -26,4 +26,6 @@ if errorlevel 1 (
 echo [ClaudeDeck] Install done. Note: first launch may take up to 1 minute (AV scan on new venv).
 
 :run
-start "" .venv\Scripts\pythonw.exe -m app.tray
+rem Some uv builds ship a console-subsystem pythonw shim (black window titled pythonw.exe;
+rem closing it kills the tray). Launch hidden so either shim flavor stays windowless.
+powershell -NoProfile -WindowStyle Hidden -Command "Start-Process -WindowStyle Hidden -FilePath '%~dp0.venv\Scripts\pythonw.exe' -ArgumentList '-m','app.tray' -WorkingDirectory '%~dp0'"
