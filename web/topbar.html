@@ -71,6 +71,12 @@ uniform float uLogo, uRed, uYel, uFadeEnd, uFinale;
 
 float hash(float n) { return fract(sin(n) * 43758.5453); }
 
+// 圆角矩形 SDF(p=以中心为原点的物理像素坐标, b=半宽高, rad=圆角半径)
+float sdRoundBox(vec2 p, vec2 b, float rad) {
+  vec2 q = abs(p) - b + rad;
+  return length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - rad;
+}
+
 vec3 darkBase(vec2 uv) {
   vec3 col = mix(vec3(0.050,0.066,0.090), vec3(0.066,0.086,0.118), uv.x);
   float w = sin(uv.x*5.0 - t*0.22) * sin(uv.x*2.3 + t*0.13);
@@ -118,10 +124,10 @@ void main() {
       float pe = 1.0 - pow(1.0 - cyc, 2.6);  // ease-out:末段自然减速
       float px = mix(x0, uFadeEnd, pe);
       float py = 0.22 + 0.56 * hash(fi * 9.21 + gen * 2.71);
-      vec2 d = abs(vec2((uv.x - px) * r.x, (uv.y - py) * r.y));
-      float inside = step(max(d.x, d.y), hs);
+      vec2 p = vec2((uv.x - px) * r.x, (uv.y - py) * r.y);
+      float m = 1.0 - smoothstep(-1.0, 1.0, sdRoundBox(p, vec2(hs), hs * 0.45)); // 圆角
       float alpha = (1.0 - smoothstep(0.68, 1.0, cyc)) * 0.8; // 快停下时再渐隐
-      col = mix(col, vec3(0.98, 0.72, 0.22), inside * alpha);
+      col = mix(col, vec3(0.98, 0.72, 0.22), m * alpha);
     }
   }
 
@@ -132,9 +138,12 @@ void main() {
       float p = clamp(ft / 0.85, 0.0, 1.0);
       p = 1.0 - pow(1.0 - p, 3.0);       // ease-out
       float px = mix(uLogo + 0.05, 0.995, p);
-      float hs2 = clamp(r.y * 0.13, 3.0, 8.0);
-      vec2 d2 = abs(vec2((uv.x - px) * r.x, (uv.y - 0.5) * r.y));
-      col = mix(col, vec3(0.35, 0.75, 0.5), step(max(d2.x, d2.y), hs2) * 0.85);
+      // 黄色细竖条圆角矩形(宽约 5px,高约条高的 2/3)
+      float hx = clamp(r.y * 0.045, 2.0, 3.5);
+      float hy = r.y * 0.33;
+      vec2 p2 = vec2((uv.x - px) * r.x, (uv.y - 0.5) * r.y);
+      float m2 = 1.0 - smoothstep(-1.0, 1.0, sdRoundBox(p2, vec2(hx, hy), hx * 0.9));
+      col = mix(col, vec3(0.98, 0.72, 0.22), m2 * 0.9);
     }
     float fl = smoothstep(0.75, 1.0, ft) * (1.0 - smoothstep(1.05, 1.7, ft));
     col = mix(col, vec3(0.10, 0.36, 0.24), fl * 0.65);
