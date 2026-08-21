@@ -141,6 +141,13 @@ def _run_webview(cfg) -> bool:
     bar_h = int(BAR_LOGICAL_H * dpi / 96)
     state: dict = {"abd": None}
 
+    def _set_height(h_phys: int) -> None:
+        hwnd = state.get("hwnd")
+        if not hwnd:
+            return
+        SWP_NOZORDER, SWP_NOACTIVATE = 0x0004, 0x0010
+        user32.SetWindowPos(hwnd, 0, 0, 0, screen_w, h_phys, SWP_NOZORDER | SWP_NOACTIVATE)
+
     class Api:
         def open_deck(self):
             webbrowser.open(f"http://127.0.0.1:{port}/live.html")
@@ -148,6 +155,13 @@ def _run_webview(cfg) -> bool:
         def quit(self):
             for w in list(webview.windows):
                 w.destroy()
+
+        # 抽屉机制:菜单/改名框超出 32px 条,弹性加高窗口临时容纳(AppBar 占位不变)
+        def expand(self, h_logical):
+            _set_height(int(float(h_logical) * dpi / 96))
+
+        def collapse(self):
+            _set_height(bar_h)
 
     def on_shown():
         hwnd = user32.FindWindowW(None, "CCTopBar")
@@ -158,6 +172,16 @@ def _run_webview(cfg) -> bool:
         GWL_EXSTYLE, WS_EX_TOOLWINDOW, WS_EX_APPWINDOW = -20, 0x00000080, 0x00040000
         ex = user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
         user32.SetWindowLongW(hwnd, GWL_EXSTYLE, (ex | WS_EX_TOOLWINDOW) & ~WS_EX_APPWINDOW)
+        state["hwnd"] = hwnd
+        # Win11 DWM 默认给顶级窗口自动圆角+1px 描边 → 四角漏壁纸(用户实报)。显式关闭。
+        try:
+            dwm = ctypes.windll.dwmapi
+            pref = ctypes.c_int(1)  # DWMWCP_DONOTROUND
+            dwm.DwmSetWindowAttribute(hwnd, 33, ctypes.byref(pref), 4)
+            border = ctypes.c_uint(0xFFFFFFFE)  # DWMWA_BORDER_COLOR = COLOR_NONE
+            dwm.DwmSetWindowAttribute(hwnd, 34, ctypes.byref(border), 4)
+        except Exception:
+            pass
         abd = _appbar(hwnd, screen_w, bar_h)
         state["abd"] = abd
         # 强制压回 AppBar 矩形(物理像素;min_size 已放开,不会再被撑到 100px)
