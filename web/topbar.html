@@ -82,17 +82,17 @@ float sdRoundBox(vec2 p, vec2 b, float rad) {
 }
 
 // 绿条飞行曲线:三段连续(快起减速→匀速→缓动到停),段间速度连续无停顿
-// u∈[0,1] 归一化时间 → 归一化路程;u1/u2 为段界,v 为巡航速度(由总路程=1 解出)
+// 路程配比 47.5% + 5%(匀速,居中) + 47.5%;u∈[0,1] 归一化时间 → 归一化路程
 float flightP(float u) {
-  float u1 = 0.22, u2 = 0.78;
-  float v = 1.0 / (1.75 * u1 + (u2 - u1) + 0.5 * (1.0 - u2));
-  float v0 = 2.5 * v;                       // 起始速度(快起)
+  float k = 2.5;                        // 起速/巡航比
+  float v = 1.0 + 0.95 / (k + 1.0);     // 巡航速度(总路程=1 的解析解)
+  float u1 = 0.95 / (v * (k + 1.0));    // 减速段时长
+  float u2 = u1 + 0.05 / v;             // 匀速段结束
+  float v0 = k * v;
   if (u < u1) return v0 * u + (v - v0) * u * u / (2.0 * u1);
-  float s1 = u1 * (v0 + v) * 0.5;
-  if (u < u2) return s1 + v * (u - u1);
-  float s2 = s1 + v * (u2 - u1);
+  if (u < u2) return 0.475 + v * (u - u1);
   float w = u - u2;
-  return s2 + v * w - v * w * w / (2.0 * (1.0 - u2));
+  return 0.525 + v * w - v * w * w / (2.0 * (1.0 - u2));
 }
 
 vec3 darkBase(vec2 uv) {
