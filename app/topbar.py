@@ -82,6 +82,20 @@ def _post_focus(port: int, sid: str) -> None:
         pass  # 失败无处提示,静默(网页端同操作会有 toast)
 
 
+def _put_tag(port: int, sid: str, tag: str) -> None:
+    body = json.dumps({"tag": tag}, ensure_ascii=False).encode("utf-8")
+    req = urllib.request.Request(
+        f"http://127.0.0.1:{port}/api/sessions/{sid}/tag",
+        data=body,
+        headers={"Content-Type": "application/json; charset=utf-8"},
+        method="PUT",
+    )
+    try:
+        urllib.request.urlopen(req, timeout=4)
+    except Exception:
+        pass
+
+
 def main() -> None:
     kernel32 = ctypes.windll.kernel32
     kernel32.CreateMutexW(None, False, "Local\\ClaudeDeckTopBar")
@@ -134,17 +148,39 @@ def main() -> None:
 
     threading.Thread(target=poller, daemon=True).start()
 
-    menu = tk.Menu(root, tearoff=0, bg=BG, fg="#dbe2ec",
-                   activebackground="#1f2733", activeforeground="#e2a13c")
-    menu.add_command(label="打开 ClaudeDeck", command=lambda: webbrowser.open(f"http://127.0.0.1:{port}/live.html"))
-    menu.add_separator()
-
     def quit_bar():
         _appbar_remove(abd)
         root.destroy()
 
-    menu.add_command(label="关闭 CCTopBar", command=quit_bar)
-    root.bind("<Button-3>", lambda e: menu.tk_popup(e.x_root, e.y_root))
+    def _menu_base() -> "tk.Menu":
+        m = tk.Menu(root, tearoff=0, bg=BG, fg="#dbe2ec",
+                    activebackground="#1f2733", activeforeground="#e2a13c")
+        m.add_command(label="打开 ClaudeDeck",
+                      command=lambda: webbrowser.open(f"http://127.0.0.1:{port}/live.html"))
+        m.add_command(label="关闭 CCTopBar", command=quit_bar)
+        return m
+
+    def edit_tag(sid: str, label: str, cur: str) -> None:
+        from tkinter import simpledialog
+
+        v = simpledialog.askstring(
+            "重命名", f"给「{label}」起个名字(留空=清除):", initialvalue=cur, parent=root
+        )
+        if v is None:
+            return
+        threading.Thread(target=_put_tag, args=(port, sid, v), daemon=True).start()
+
+    def cell_menu(e, sid: str, label: str, cur: str) -> None:
+        m = tk.Menu(root, tearoff=0, bg=BG, fg="#dbe2ec",
+                    activebackground="#1f2733", activeforeground="#e2a13c")
+        m.add_command(label=f"重命名「{label}」…", command=lambda: edit_tag(sid, label, cur))
+        m.add_separator()
+        m.add_command(label="打开 ClaudeDeck",
+                      command=lambda: webbrowser.open(f"http://127.0.0.1:{port}/live.html"))
+        m.add_command(label="关闭 CCTopBar", command=quit_bar)
+        m.tk_popup(e.x_root, e.y_root)
+
+    root.bind("<Button-3>", lambda e: _menu_base().tk_popup(e.x_root, e.y_root))
 
     last_sig: list = [None]
 
@@ -170,13 +206,14 @@ def main() -> None:
             for s in sessions:
                 is_bg = s.get("kind") == "bg"
                 color = COLORS.get(s.get("status"), FG_DIM)
-                label = s.get("tag") or s.get("name") or (s.get("session_id") or "?")[:8]
+                sid = s.get("session_id") or ""
+                label = s.get("tag") or s.get("name") or sid[:8] or "?"
+                cur_tag = s.get("tag") or ""
                 text = f"● {label}"
                 cell_bg = "#2a1c1c" if s.get("status") == "waiting" else BG
                 cell = tk.Label(strip, text=text, font=f, bg=cell_bg, fg=color, padx=8)
                 cell.pack(side="left", padx=2, pady=1)
                 if not is_bg:
-                    sid = s.get("session_id") or ""
                     cell.configure(cursor="hand2")
                     cell.bind(
                         "<Button-1>",
@@ -184,7 +221,10 @@ def main() -> None:
                             target=_post_focus, args=(port, x), daemon=True
                         ).start(),
                     )
-                cell.bind("<Button-3>", lambda e: menu.tk_popup(e.x_root, e.y_root))
+                cell.bind(
+                    "<Button-3>",
+                    lambda e, x=sid, l=label, c=cur_tag: cell_menu(e, x, l, c),
+                )
         root.after(500, redraw)
 
     root.protocol("WM_DELETE_WINDOW", quit_bar)

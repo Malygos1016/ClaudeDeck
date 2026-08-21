@@ -145,6 +145,29 @@ a:hover { text-decoration: underline; }
 .win-card:hover .tag-edit { opacity: 1; }
 .badge.tag-chip { color: var(--amber); border-color: rgba(226, 161, 60, 0.5); }
 
+/* 灯条铅笔:hover 该格时格子拉长露出 🖊 */
+.ann-edit {
+  width: 0; opacity: 0; overflow: hidden;
+  border: none; background: none; cursor: pointer;
+  font-size: 11px; padding: 0; margin-left: 0;
+  transition: width 0.18s ease, opacity 0.18s ease, margin-left 0.18s ease;
+}
+.ann-cell:hover .ann-edit { width: 16px; opacity: 0.9; margin-left: 5px; }
+
+/* 就地编辑浮层 */
+.tag-editor {
+  position: fixed; z-index: 120;
+  background: var(--glass); -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px);
+  border: 1px solid var(--glass-border); border-radius: var(--rad);
+  padding: 6px; box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+}
+.tag-input {
+  width: 220px; font-size: 13px; color: var(--text);
+  background: rgba(7, 16, 34, 0.55); caret-color: var(--amber);
+  border: 1px solid var(--line); border-radius: 4px; padding: 5px 8px;
+}
+.tag-input:focus { outline: none; border-color: var(--amber); }
+
 /* 仪表灯:NERV 方灯。busy 双脉冲,waiting 急闪 */
 .lamp { width: 7px; height: 7px; border-radius: 1.5px; background: var(--ok); flex: none;
   box-shadow: 0 0 6px -1px currentColor; color: var(--ok); }

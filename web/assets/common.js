@@ -85,10 +85,50 @@ export function toast(text, ms = 2600) {
 }
 
 // visibilitychange 感知的轮询器:页面切后台即暂停,回来立即刷一次。
-// 点击聚焦(灯条与看板卡共用):委托全局,页面各自的元素只要带 data-focus-sid
+// ---------- 标签就地编辑器(body 级浮层,免疫容器的轮询重渲染) ----------
+let _tagEditor = null;
+
+export function closeTagEditor() {
+  _tagEditor?.remove();
+  _tagEditor = null;
+}
+
+export function openTagEditor(anchor, sid, cur) {
+  closeTagEditor();
+  const r = anchor.getBoundingClientRect();
+  const wrap = document.createElement("div");
+  wrap.className = "tag-editor";
+  wrap.style.left = `${Math.max(8, Math.min(r.left, window.innerWidth - 248))}px`;
+  wrap.style.top = `${r.bottom + 6}px`;
+  wrap.innerHTML = `<input class="tag-input" maxlength="60" placeholder="起个名字,留空=清除,回车保存">`;
+  document.body.appendChild(wrap);
+  _tagEditor = wrap;
+  const input = wrap.querySelector("input");
+  input.value = cur || "";
+  input.focus();
+  input.select();
+  const save = async () => {
+    const v = input.value;
+    closeTagEditor();
+    await api(`/api/sessions/${sid}/tag`, { json: { tag: v }, method: "PUT" });
+    toast(v.trim() ? `已命名:${v.trim().slice(0, 60)}` : "已清除标签");
+  };
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") save();
+    else if (e.key === "Escape") closeTagEditor();
+  });
+  input.addEventListener("blur", () => setTimeout(closeTagEditor, 150));
+}
+
+// 点击委托(灯条与看板卡共用):铅笔=就地改名,其余带 data-focus-sid 的=聚焦
 document.addEventListener("click", async (e) => {
+  const ed = e.target.closest("[data-tagedit-sid]");
+  if (ed) {
+    openTagEditor(ed, ed.dataset.tageditSid, ed.dataset.tageditCur);
+    return;
+  }
   const el = e.target.closest("[data-focus-sid]");
-  if (!el || e.target.closest("[data-tag-sid]")) return;
+  if (!el) return;
   try {
     await api(`/api/live/${el.dataset.focusSid}/focus`, { json: {} });
   } catch { /* api() 已 toast 错误 */ }
@@ -274,7 +314,8 @@ async function initAnnunciator() {
         `${s.tag ? `${s.name} · ` : ""}${s.cwd || ""} · ${state}` +
           (s.kind === "bg" ? " · 后台驻留(无窗口)" : " · 点击聚焦到该窗口")
       );
-      return `<span class="ann-cell${bg}"${focusAttr} title="${title}"><span class="lamp ${lamp}"></span>${label}</span>`;
+      const pencil = `<button class="ann-edit" data-tagedit-sid="${esc(s.session_id || "")}" data-tagedit-cur="${esc(s.tag || "")}" title="重命名(只影响 ClaudeDeck/CCTopBar 显示)">🖊</button>`;
+      return `<span class="ann-cell${bg}"${focusAttr} title="${title}"><span class="lamp ${lamp}"></span>${label}${pencil}</span>`;
     });
     el.innerHTML = cells.join("");
     el.hidden = cells.length === 0;
