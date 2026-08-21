@@ -155,6 +155,22 @@ def purge_project(
     }
 
 
+@router.put("/sessions/{sid}/tag")
+def put_tag(
+    sid: str,
+    request: Request,
+    tag: str | None = Body(None, embed=True),
+    con: sqlite3.Connection = Depends(request_db),
+):
+    """给会话打自定义标签(空值=清除)。存 tags.json,重建索引不丢。"""
+    _srow(con, sid)
+    from ..tags import set_tag
+
+    set_tag(request.app.state.cfg, sid, tag)
+    clean = (tag or "").strip()[:60]
+    return {"ok": True, "tag": clean or None}
+
+
 # ---------- 配置 ----------
 
 MUTABLE_KEYS = {

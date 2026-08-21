@@ -5,6 +5,8 @@ pythonw 下 sys.stdout/stderr 是 None,任何 print/日志一写就炸(win-env �
 """
 from __future__ import annotations
 
+import ctypes
+import subprocess
 import sys
 import threading
 import urllib.request
@@ -12,6 +14,47 @@ import webbrowser
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
+CREATE_NO_WINDOW = 0x08000000
+WM_CLOSE = 0x0010
+
+_topbar: list = [None]
+
+
+def _topbar_alive() -> bool:
+    p = _topbar[0]
+    return p is not None and p.poll() is None
+
+
+def _start_topbar() -> None:
+    if _topbar_alive():
+        return
+    _topbar[0] = subprocess.Popen(
+        [sys.executable, "-m", "app.topbar"], cwd=str(ROOT), creationflags=CREATE_NO_WINDOW
+    )
+
+
+def _stop_topbar() -> None:
+    """先礼后兵:WM_CLOSE 让它优雅退出(归还 AppBar 空间),2s 不走再 terminate。"""
+    p = _topbar[0]
+    if p is None:
+        return
+    if p.poll() is None:
+        user32 = ctypes.windll.user32
+
+        @ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
+        def enum_cb(hwnd, _):
+            pid = ctypes.c_ulong()
+            user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+            if pid.value == p.pid:
+                user32.PostMessageW(hwnd, WM_CLOSE, 0, 0)
+            return True
+
+        user32.EnumWindows(enum_cb, None)
+        try:
+            p.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            p.terminate()
+    _topbar[0] = None
 
 
 def _redirect_std() -> None:
@@ -85,7 +128,16 @@ def main() -> None:
 
         os.startfile(ROOT / "tray.log")
 
+    def on_topbar(icon, item):
+        cfg.topbar_enabled = not cfg.topbar_enabled
+        cfg.save()
+        if cfg.topbar_enabled:
+            _start_topbar()
+        else:
+            _stop_topbar()
+
     def on_quit(icon, item):
+        _stop_topbar()
         server.should_exit = True
         icon.stop()
 
@@ -95,10 +147,13 @@ def main() -> None:
         "ClaudeDeck — 会话管理",
         menu=Menu(
             MenuItem("打开界面", on_open, default=True),
+            MenuItem("CCTopBar 顶栏", on_topbar, checked=lambda item: cfg.topbar_enabled),
             MenuItem("查看日志", on_log),
             MenuItem("退出", on_quit),
         ),
     )
+    if cfg.topbar_enabled:
+        _start_topbar()
     threading.Timer(1.2, webbrowser.open, args=(url,)).start()
     icon.run()
 

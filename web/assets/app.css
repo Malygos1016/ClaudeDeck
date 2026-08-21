@@ -138,6 +138,12 @@ a:hover { text-decoration: underline; }
 }
 .ann-cell:hover { border-color: var(--amber); color: var(--text); text-decoration: none; box-shadow: inset 1px 1px 0 rgba(255,255,255,0.07), -2px -3px 9px -4px var(--rim-warm); }
 .ann-cell.bg { border-style: dashed; opacity: 0.75; }
+.ann-cell[data-focus-sid] { cursor: pointer; }
+.win-top[data-focus-sid] { cursor: pointer; border-radius: 4px; }
+.win-top[data-focus-sid]:hover { background: rgba(226, 161, 60, 0.06); }
+.tag-edit { padding: 0 5px; font-size: 11px; opacity: 0; }
+.win-card:hover .tag-edit { opacity: 1; }
+.badge.tag-chip { color: var(--amber); border-color: rgba(226, 161, 60, 0.5); }
 
 /* 仪表灯:NERV 方灯。busy 双脉冲,waiting 急闪 */
 .lamp { width: 7px; height: 7px; border-radius: 1.5px; background: var(--ok); flex: none;

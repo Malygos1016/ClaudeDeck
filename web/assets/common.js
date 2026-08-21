@@ -85,6 +85,15 @@ export function toast(text, ms = 2600) {
 }
 
 // visibilitychange 感知的轮询器:页面切后台即暂停,回来立即刷一次。
+// 点击聚焦(灯条与看板卡共用):委托全局,页面各自的元素只要带 data-focus-sid
+document.addEventListener("click", async (e) => {
+  const el = e.target.closest("[data-focus-sid]");
+  if (!el || e.target.closest("[data-tag-sid]")) return;
+  try {
+    await api(`/api/live/${el.dataset.focusSid}/focus`, { json: {} });
+  } catch { /* api() 已 toast 错误 */ }
+});
+
 export function poll(fn, ms) {
   let stopped = false;
   const tick = async () => {
@@ -258,10 +267,14 @@ async function initAnnunciator() {
     const cells = (data.sessions || []).map((s) => {
       const lamp = s.status === "waiting" ? "waiting" : s.status === "busy" ? "busy" : "";
       const bg = s.kind === "bg" ? " bg" : "";
-      const name = esc(s.name || s.session_id?.slice(0, 8) || "?");
+      const label = esc(s.tag || s.name || s.session_id?.slice(0, 8) || "?");
       const state = s.status === "waiting" ? "等待你" : s.status;
-      const title = esc(`${s.cwd || ""} · ${state}${s.kind === "bg" ? " · 后台驻留(无窗口)" : ""}`);
-      return `<span class="ann-cell${bg}" title="${title}"><span class="lamp ${lamp}"></span>${name}</span>`;
+      const focusAttr = s.kind === "bg" ? "" : ` data-focus-sid="${esc(s.session_id || "")}"`;
+      const title = esc(
+        `${s.tag ? `${s.name} · ` : ""}${s.cwd || ""} · ${state}` +
+          (s.kind === "bg" ? " · 后台驻留(无窗口)" : " · 点击聚焦到该窗口")
+      );
+      return `<span class="ann-cell${bg}"${focusAttr} title="${title}"><span class="lamp ${lamp}"></span>${label}</span>`;
     });
     el.innerHTML = cells.join("");
     el.hidden = cells.length === 0;

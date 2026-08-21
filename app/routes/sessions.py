@@ -13,6 +13,7 @@ from ..launcher import PROVIDER_NOTES, build_resume_command
 from ..live import read_live_sessions
 from ..pi import parse_pi_view_items
 from ..render import export_markdown, parse_view_items, resolve_transcript_path, window
+from ..tags import load_tags
 from ..search import MARK_L, MARK_R, search as do_search
 from ..transcript import bridge_url
 from . import request_db
@@ -82,10 +83,12 @@ def list_sessions(
         params + [page_size, (page - 1) * page_size],
     ).fetchall()
     running = _running_sids(request)
+    tags = load_tags(request.app.state.cfg)
     items = []
     for r in rows:
         d = _session_out(r)
         d["running"] = d["session_id"] in running
+        d["tag"] = tags.get(d["session_id"])
         items.append(d)
     return {"total": total, "page": page, "page_size": page_size, "items": items}
 
@@ -144,6 +147,7 @@ def session_detail(
             plan = {"slug": row["slug"], "path": str(p)}
     out = _session_out(row)
     out["running"] = out["session_id"] in _running_sids(request)
+    out["tag"] = load_tags(request.app.state.cfg).get(out["session_id"])
     return {"session": out, "subagents": subagents, "plan": plan}
 
 

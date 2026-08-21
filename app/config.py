@@ -39,6 +39,7 @@ class Config:
     )
     index_thinking: bool = False
     index_tool_results: bool = False
+    topbar_enabled: bool = False  # CCTopBar 桌面顶端常驻条,托盘菜单开关
     # 本配置文件自身的位置(save 写回处;测试用临时路径隔离,不污染真实 config.json)
     config_path: str = field(default_factory=lambda: str(DEFAULT_CONFIG_PATH))
 
@@ -74,7 +75,8 @@ class Config:
     def load(cls, path: str | Path | None = None) -> "Config":
         p = Path(path) if path else DEFAULT_CONFIG_PATH
         if p.exists():
-            data = json.loads(p.read_text(encoding="utf-8"))
+            # utf-8-sig:容忍 BOM(记事本/PowerShell 写入的常态,win-env 老坑)
+            data = json.loads(p.read_text(encoding="utf-8-sig"))
             known = {f.name for f in dataclasses.fields(cls)} - {"config_path"}
             cfg = cls(**{k: v for k, v in data.items() if k in known})
             cfg.config_path = str(p)

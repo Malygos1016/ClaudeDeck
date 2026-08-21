@@ -56,6 +56,7 @@ function rowHtml(s, extra = "") {
   <div class="session-row" data-sid="${esc(s.session_id)}">
     <div class="row-top">
       ${s.provider && s.provider !== "claude" ? `<span class="badge prov-${esc(s.provider)}">${esc(s.provider)}</span>` : ""}
+      ${s.tag ? `<span class="badge tag-chip" title="自定义标签">${esc(s.tag)}</span>` : ""}
       <a class="row-title" href="/session.html?sid=${esc(s.session_id)}" title="${esc(s.title || "")}">${esc(s.title || "(无标题)")}</a>
       <span class="row-actions acts-grid">${actionsHtml(s)}</span>
     </div>

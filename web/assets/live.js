@@ -43,11 +43,13 @@ function renderWindows(data) {
     .map((s) => {
       const cardMod =
         s.alive && s.status === "waiting" ? "is-waiting" : s.alive && s.status === "busy" ? "is-busy" : "";
+      const focusAttr = s.kind === "bg" ? "" : ` data-focus-sid="${esc(s.session_id || "")}" title="点击聚焦到该窗口"`;
       return `
       <div class="win-card ${cardMod}">
-        <div class="win-top">
+        <div class="win-top"${focusAttr}>
           <span class="lamp ${lampClass(s)}"></span>
-          <span class="win-name mono">${esc(s.name || "?")}</span>
+          <span class="win-name mono" ${s.tag ? `title="原名 ${esc(s.name || "")}"` : ""}>${esc(s.tag || s.name || "?")}</span>
+          <button class="tag-edit ghost-btn" data-tag-sid="${esc(s.session_id || "")}" data-tag-cur="${esc(s.tag || "")}" title="打标/改名(只影响 ClaudeDeck 显示)">✎</button>
           ${s.kind === "bg" ? '<span class="badge bg" title="daemon 驻留的后台会话,没有窗口;用 claude agents 管理或在后台作业区处理">后台驻留</span>' : ""}
           ${statusText(s)}
         </div>
@@ -295,7 +297,16 @@ document.querySelectorAll(".chart-toggle").forEach((btn) => {
 });
 window.addEventListener("resize", () => { if (lastCurves) drawCharts(lastCurves); });
 
-document.addEventListener("click", (e) => {
+document.addEventListener("click", async (e) => {
+  const tagEl = e.target.closest("[data-tag-sid]");
+  if (tagEl) {
+    const cur = tagEl.dataset.tagCur || "";
+    const val = window.prompt("给这个会话起个名字(留空=清除,只影响 ClaudeDeck/CCTopBar 显示):", cur);
+    if (val === null) return;
+    await api(`/api/sessions/${tagEl.dataset.tagSid}/tag`, { json: { tag: val }, method: "PUT" });
+    refreshWindows();
+    return;
+  }
   const el = e.target.closest("[data-copy]");
   if (el) copyText(el.dataset.copy, "已复制");
 });
