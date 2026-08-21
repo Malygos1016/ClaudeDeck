@@ -53,10 +53,14 @@ const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&":"&amp;","<"
 /* ================= 状态(渲染层与 shader 共享) ================= */
 // 分区占比按窗口数量计:红=waiting 黄=busy 绿=idle
 const S = {
-  redFrac: 0, yelFrac: 0, total: 0,
+  // 目标值(轮询更新)与显示值(每帧指数平滑追踪,τ≈0.5s):色带缓动涨跌的机制
+  redFrac: 0, yelFrac: 0, fadeEnd: 0.5,
+  dispRed: 0, dispYel: 0, dispFade: 0.5,
+  total: 0,
   logoFrac: 0.04,     // logo 区宽度占屏比(实测更新)
-  fadeEnd: 0.5,       // 飞块渐隐终点 = 最右 tag 位置 + 15% 屏宽
-  finaleAt: -1,       // 全绿转场的启动时刻(shader 时间基),-1 = 无
+  finaleAt: -1,       // 全绿转场启动时刻(shader 时间基),-1 = 无
+  sweepEnd: 0.5,      // 转场触发瞬间的黄带右边界快照(绿条收卷的终点)
+  redPulseAt: -1,     // 红带首现的红脉冲时刻
 };
 
 /* ================= GLSL:分区底色 + 黄区飞块 + 全绿转场 ================= */
@@ -67,7 +71,7 @@ if (gl) {
   const VS = "attribute vec2 p;void main(){gl_Position=vec4(p,0.,1.);}";
   const FS = `precision mediump float;
 uniform float t; uniform vec2 r;
-uniform float uLogo, uRed, uYel, uFadeEnd, uFinale;
+uniform float uLogo, uRed, uYel, uFadeEnd, uFinale, uSweepEnd, uRedPulse;
 
 float hash(float n) { return fract(sin(n) * 43758.5453); }
 
@@ -110,45 +114,67 @@ void main() {
   col = mix(col, yelC, wYel * 0.8);
 
   // 黄区飞块:生成时纵坐标随机抖动,ease-out 减速右飞,尾段减速时才渐隐;
-  // 终点 uFadeEnd = 最右 busy tag 右缘 + 5% 屏宽(JS 量出,单行多行通吃)
-  if (uYel > 0.001) {
+  // 转场触发后 0.4s 内存量方块淡出(几何切到快照带),不瞬灭
+  float finT = (uFinale >= 0.0) ? (t - uFinale) : -1.0;
+  bool sqOn = uYel > 0.001 || (finT >= 0.0 && finT < 0.4);
+  if (sqOn) {
     float hs = clamp(r.y * 0.16, 4.0, 9.0); // 方块半边长(物理像素)
-    float bandStart = max(rw, uLogo);        // 避开 logo 文字区
+    float b0 = (uYel > 0.001) ? max(rw, uLogo) : uLogo;
+    float b1 = (uYel > 0.001) ? yw : uSweepEnd;
+    float aScale = (uYel > 0.001) ? 1.0 : (1.0 - finT / 0.4);
     for (int i = 0; i < 9; i++) {
       float fi = float(i);
       float period = 1.4 + hash(fi * 7.13) * 1.3;
       float phase = t / period + hash(fi * 3.31);
       float cyc = fract(phase);
       float gen = floor(phase);
-      float x0 = bandStart + hash(fi * 5.77 + gen * 1.13) * max(yw - bandStart, 0.02); // 黄带内生成
+      float x0 = b0 + hash(fi * 5.77 + gen * 1.13) * max(b1 - b0, 0.02); // 黄带内生成
       float pe = 1.0 - pow(1.0 - cyc, 2.6);  // ease-out:末段自然减速
       float px = mix(x0, uFadeEnd, pe);
       float py = 0.22 + 0.56 * hash(fi * 9.21 + gen * 2.71);
       vec2 p = vec2((uv.x - px) * r.x, (uv.y - py) * r.y);
       float m = 1.0 - smoothstep(-1.0, 1.0, sdRoundBox(p, vec2(hs), hs * 0.45)); // 圆角
-      float alpha = (1.0 - smoothstep(0.68, 1.0, cyc)) * 0.8; // 快停下时再渐隐
+      float alpha = (1.0 - smoothstep(0.68, 1.0, cyc)) * 0.8 * aScale;
       col = mix(col, vec3(0.98, 0.72, 0.22), m * alpha);
     }
   }
 
-  // 全绿转场:亮绿细竖条 起点停留→ease-out 飞行→右端停留 → 整条闪绿 → 回深色
-  if (uFinale >= 0.0) {
-    float ft = t - uFinale;
-    if (ft < 2.0) {
-      float p = (ft < 0.25) ? 0.0
-        : 1.0 - pow(1.0 - clamp((ft - 0.25) / 1.3, 0.0, 1.0), 3.0); // 停留后缓动
-      float px = mix(uLogo + 0.05, 0.992, p);
+  // 全绿转场「绿条收卷」:绿条从最左向右扫,黄色只保留在绿条前方(被推着收走)
+  // → 扫尽后独自滑到最右停留 → 整条闪绿 → 回深色
+  if (finT >= 0.0) {
+    float pxBar;
+    if (finT < 0.9) {
+      float p = 1.0 - pow(1.0 - clamp(finT / 0.9, 0.0, 1.0), 3.0);
+      pxBar = mix(0.008, uSweepEnd, p);
+      float edge = 2.0 / r.x;   // 收卷前沿(约 2px 利落切边)
+      float wKeep = smoothstep(pxBar, pxBar + edge, uv.x)
+                  * (1.0 - smoothstep(uSweepEnd - tr, uSweepEnd + tr, uv.x));
+      col = mix(col, yelC, wKeep * 0.8);
+    } else if (finT < 1.55) {
+      float p = 1.0 - pow(1.0 - clamp((finT - 0.9) / 0.65, 0.0, 1.0), 3.0);
+      pxBar = mix(uSweepEnd, 0.992, p);
+    } else {
+      pxBar = 0.992;            // 右端停留
+    }
+    if (finT < 2.0) {
       float hx = clamp(r.y * 0.045, 2.0, 3.5);
       float hy = r.y * 0.33;
-      vec2 p2 = vec2((uv.x - px) * r.x, (uv.y - 0.5) * r.y);
+      vec2 p2 = vec2((uv.x - pxBar) * r.x, (uv.y - 0.5) * r.y);
       float sd = sdRoundBox(p2, vec2(hx, hy), hx * 0.9);
       float glow = (1.0 - smoothstep(-1.0, 10.0, sd)) * 0.35;   // 柔光圈
       float core = 1.0 - smoothstep(-1.0, 1.0, sd);
       col = mix(col, vec3(0.30, 0.95, 0.55), glow);
       col = mix(col, vec3(0.62, 1.0, 0.78), core * 0.95);       // 高亮绿核心
     }
-    float fl = smoothstep(1.55, 1.95, ft) * (1.0 - smoothstep(2.3, 3.0, ft));
+    float fl = smoothstep(1.55, 1.95, finT) * (1.0 - smoothstep(2.3, 3.0, finT));
     col = mix(col, vec3(0.10, 0.62, 0.34), fl * 0.8);           // 更亮更饱和的闪绿
+  }
+
+  // 红带首现:整条短促红脉冲(比常驻呼吸更强的「需要你」信号)
+  if (uRedPulse >= 0.0) {
+    float rt = t - uRedPulse;
+    float pl = smoothstep(0.0, 0.08, rt) * (1.0 - smoothstep(0.12, 0.35, rt));
+    col = mix(col, vec3(0.55, 0.15, 0.13), pl * 0.5);
   }
 
   gl_FragColor = vec4(col, 1.0);
@@ -164,27 +190,42 @@ void main() {
   const loc = gl.getAttribLocation(prog, "p");
   gl.enableVertexAttribArray(loc); gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
   uniforms = Object.fromEntries(
-    ["t", "r", "uLogo", "uRed", "uYel", "uFadeEnd", "uFinale"].map((n) => [n, gl.getUniformLocation(prog, n)])
+    ["t", "r", "uLogo", "uRed", "uYel", "uFadeEnd", "uFinale", "uSweepEnd", "uRedPulse"]
+      .map((n) => [n, gl.getUniformLocation(prog, n)])
   );
-  let last = 0;
-  const FRAME_MS = 33; // 有动效跑 30fps;纯深色时降到 5fps 省 GPU
+  let last = 0, lastDraw = 0;
+  const FRAME_MS = 33; // 有动效跑 30fps;纯深色静止时降到 5fps 省 GPU
   (function loop(ms) {
-    const active = S.redFrac > 0 || S.yelFrac > 0 || S.finaleAt >= 0;
-    if (ms - last > (active ? FRAME_MS : 200)) {
+    const animating =
+      S.redFrac > 0.001 || S.yelFrac > 0.001 ||
+      S.dispRed > 0.004 || S.dispYel > 0.004 ||
+      Math.abs(S.dispFade - S.fadeEnd) > 0.005 ||
+      S.finaleAt >= 0 || S.redPulseAt >= 0;
+    if (ms - last > (animating ? FRAME_MS : 200)) {
       last = ms;
+      const dt = Math.min((ms - lastDraw) / 1000 || 0.033, 0.25);
+      lastDraw = ms;
+      // 显示值指数追踪目标值(τ=0.5s):色带缓动涨跌;中途改目标天然平滑改道
+      const k = 1 - Math.exp(-dt / 0.5);
+      S.dispRed += (S.redFrac - S.dispRed) * k;
+      S.dispYel += (S.yelFrac - S.dispYel) * k;
+      S.dispFade += (S.fadeEnd - S.dispFade) * k;
       if (canvas.width !== innerWidth || canvas.height !== innerHeight) {
         canvas.width = innerWidth; canvas.height = innerHeight;
         gl.viewport(0, 0, canvas.width, canvas.height);
       }
       const tSec = ms / 1000;
       if (S.finaleAt >= 0 && tSec - S.finaleAt > 3.2) S.finaleAt = -1;
+      if (S.redPulseAt >= 0 && tSec - S.redPulseAt > 0.5) S.redPulseAt = -1;
       gl.uniform1f(uniforms.t, tSec);
       gl.uniform2f(uniforms.r, canvas.width, canvas.height);
       gl.uniform1f(uniforms.uLogo, S.logoFrac);
-      gl.uniform1f(uniforms.uRed, S.redFrac);
-      gl.uniform1f(uniforms.uYel, S.yelFrac);
-      gl.uniform1f(uniforms.uFadeEnd, S.fadeEnd);
+      gl.uniform1f(uniforms.uRed, S.dispRed);
+      gl.uniform1f(uniforms.uYel, S.dispYel);
+      gl.uniform1f(uniforms.uFadeEnd, S.dispFade);
       gl.uniform1f(uniforms.uFinale, S.finaleAt);
+      gl.uniform1f(uniforms.uSweepEnd, S.sweepEnd);
+      gl.uniform1f(uniforms.uRedPulse, S.redPulseAt);
       gl.drawArrays(gl.TRIANGLES, 0, 3);
     }
     requestAnimationFrame(loop);
@@ -206,7 +247,8 @@ const MOCK = (() => {
 })();
 
 let lastSig = "";
-let prevActive = false; // 上一帧是否存在红/黄(全绿转场的触发边沿)
+let prevActive = false;   // 上一轮是否存在红/黄(全绿转场的触发边沿)
+let prevRedCount = 0;     // 红带首现的脉冲边沿
 
 async function tick() {
   let sessions = MOCK;
@@ -258,8 +300,17 @@ function render(sessions) {
     rightmost = Math.max(...cellEls.map((el) => el.getBoundingClientRect().right)) / innerWidth;
   }
   S.fadeEnd = Math.min(1, rightmost + 0.15);
+  // 红带首现:整条红脉冲
+  if (prevRedCount === 0 && nRed > 0) S.redPulseAt = performance.now() / 1000;
+  prevRedCount = nRed;
+
   const active = nRed + nYel > 0;
-  if (prevActive && !active) S.finaleAt = performance.now() / 1000; // 全绿了:飞块+闪绿
+  if (prevActive && !active) {
+    // 全绿转场:拍下当前显示中的黄带右边界,常规带即刻交给快照(绿条收卷接管)
+    S.sweepEnd = S.logoFrac + S.dispYel * (1 - S.logoFrac);
+    S.finaleAt = performance.now() / 1000;
+    S.dispYel = 0;
+  }
   prevActive = active;
 }
 tick(); setInterval(tick, 2000);
