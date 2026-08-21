@@ -82,17 +82,20 @@ float sdRoundBox(vec2 p, vec2 b, float rad) {
 }
 
 // 绿条飞行曲线:三段连续(快起减速→匀速→缓动到停),段间速度连续无停顿
-// 路程配比 47.5% + 5%(匀速,居中) + 47.5%;u∈[0,1] 归一化时间 → 归一化路程
-float flightP(float u) {
+// 匀速段占路程 5%,中心在 m(=黄色特效结束处,动态);u∈[0,1] 归一化时间→路程
+float flightP(float u, float m) {
   float k = 2.5;                        // 起速/巡航比
-  float v = 1.0 + 0.95 / (k + 1.0);     // 巡航速度(总路程=1 的解析解)
-  float u1 = 0.95 / (v * (k + 1.0));    // 减速段时长
-  float u2 = u1 + 0.05 / v;             // 匀速段结束
+  m = clamp(m, 0.08, 0.92);
+  float d1 = m - 0.025;                 // 减速段路程(到匀速段起点)
+  float d3 = 1.0 - m - 0.025;          // 缓停段路程
+  float v = 2.0 * d1 / (k + 1.0) + 0.05 + 2.0 * d3;  // 巡航速度(总时间=1 解析解)
   float v0 = k * v;
+  float u1 = 2.0 * d1 / (v * (k + 1.0));
+  float u2 = u1 + 0.05 / v;
   if (u < u1) return v0 * u + (v - v0) * u * u / (2.0 * u1);
-  if (u < u2) return 0.475 + v * (u - u1);
+  if (u < u2) return d1 + v * (u - u1);
   float w = u - u2;
-  return 0.525 + v * w - v * w * w / (2.0 * (1.0 - u2));
+  return (d1 + 0.05) + v * w - v * w * w / (2.0 * (1.0 - u2));
 }
 
 vec3 darkBase(vec2 uv) {
@@ -158,8 +161,9 @@ void main() {
   if (finT >= 0.0) {
     float pxBar;
     if (finT < 1.55) {
-      // 单一连续飞行 0.008→0.992:三段速度曲线,途中扫过黄带快照
-      pxBar = mix(0.008, 0.992, flightP(clamp(finT / 1.55, 0.0, 1.0)));
+      // 单一连续飞行 0.008→0.992:三段速度曲线,匀速段落在黄带快照末端附近
+      float mNorm = (uSweepEnd - 0.008) / 0.984;
+      pxBar = mix(0.008, 0.992, flightP(clamp(finT / 1.55, 0.0, 1.0), mNorm));
       float edge = 2.0 / r.x;   // 收卷前沿(约 2px 利落切边)
       float wKeep = smoothstep(pxBar, pxBar + edge, uv.x)
                   * (1.0 - smoothstep(uSweepEnd - tr, uSweepEnd + tr, uv.x));
