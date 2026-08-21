@@ -245,11 +245,15 @@ def _run_webview(cfg) -> bool:
             _appbar_remove(state["abd"])
             state["abd"] = None
 
+    import os
+
+    mock = os.environ.get("CCTOPBAR_MOCK", "")
+    suffix = f"?mock={mock}" if mock else ""
     try:
         api = Api()
         win = webview.create_window(
             "CCTopBar",
-            url=f"http://127.0.0.1:{port}/topbar.html",
+            url=f"http://127.0.0.1:{port}/topbar.html{suffix}",
             x=0, y=0, width=screen_w, height=bar_h,
             min_size=(100, 10),  # 默认 (200,100) 会把 32px 的条强撑成 100px+(2026-08-21 实翻车)
             frameless=True, on_top=True, easy_drag=False,

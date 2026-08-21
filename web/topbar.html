@@ -103,23 +103,25 @@ void main() {
   col = mix(col, redC, wRed * 0.8);
   col = mix(col, yelC, wYel * 0.8);
 
-  // 黄区飞块:暗黄方块,生成时纵坐标随机抖动,水平直线右飞,向 uFadeEnd 渐隐
+  // 黄区飞块:生成时纵坐标随机抖动,ease-out 减速右飞,尾段减速时才渐隐;
+  // 终点 uFadeEnd = 最右 busy tag 右缘 + 5% 屏宽(JS 量出,单行多行通吃)
   if (uYel > 0.001) {
-    float hs = clamp(r.y * 0.11, 3.0, 7.0); // 方块半边长(物理像素)
+    float hs = clamp(r.y * 0.16, 4.0, 9.0); // 方块半边长(物理像素)
+    float bandStart = max(rw, uLogo);        // 避开 logo 文字区
     for (int i = 0; i < 9; i++) {
       float fi = float(i);
       float period = 1.4 + hash(fi * 7.13) * 1.3;
       float phase = t / period + hash(fi * 3.31);
       float cyc = fract(phase);
       float gen = floor(phase);
-      float bandStart = max(rw, uLogo);   // 黄带内随机起点(避开 logo 文字区)
-      float x0 = bandStart + hash(fi * 5.77 + gen * 1.13) * max(yw - bandStart, 0.02);
-      float px = mix(x0, uFadeEnd, cyc);
+      float x0 = bandStart + hash(fi * 5.77 + gen * 1.13) * max(yw - bandStart, 0.02); // 黄带内生成
+      float pe = 1.0 - pow(1.0 - cyc, 2.6);  // ease-out:末段自然减速
+      float px = mix(x0, uFadeEnd, pe);
       float py = 0.22 + 0.56 * hash(fi * 9.21 + gen * 2.71);
       vec2 d = abs(vec2((uv.x - px) * r.x, (uv.y - py) * r.y));
       float inside = step(max(d.x, d.y), hs);
-      float alpha = (1.0 - cyc) * (1.0 - cyc) * 0.5;
-      col = mix(col, vec3(0.62, 0.44, 0.12), inside * alpha);
+      float alpha = (1.0 - smoothstep(0.68, 1.0, cyc)) * 0.8; // 快停下时再渐隐
+      col = mix(col, vec3(0.98, 0.72, 0.22), inside * alpha);
     }
   }
 
@@ -227,7 +229,8 @@ function render(sessions) {
   host.classList.remove("two-rows");
   const overflow = host.scrollWidth > host.clientWidth + 1;
   if (overflow) host.classList.add("two-rows");
-  window.pywebview?.api?.set_rows(overflow ? 2 : 1);
+  S.rows = overflow ? 2 : 1;
+  window.pywebview?.api?.set_rows(S.rows);
 
   // shader 状态:占比 / logo 宽 / 渐隐终点 / 全绿转场边沿
   const n = sessions.length;
@@ -237,10 +240,11 @@ function render(sessions) {
   S.redFrac = nRed / n;
   S.yelFrac = nYel / n;
   S.logoFrac = Math.min(0.12, ($("brand").offsetWidth + 14) / innerWidth);
-  const cellEls = host.querySelectorAll(".cell");
+  // 飞块终点 = 最右侧 tag(绿色组在最右)右缘 + 15% 屏宽;占满则以屏幕最右为界
+  const cellEls = [...host.querySelectorAll(".cell")];
   let rightmost = 0.3;
   if (cellEls.length) {
-    rightmost = Math.max(...[...cellEls].map((el) => el.getBoundingClientRect().right)) / innerWidth;
+    rightmost = Math.max(...cellEls.map((el) => el.getBoundingClientRect().right)) / innerWidth;
   }
   S.fadeEnd = Math.min(1, rightmost + 0.15);
   const active = nRed + nYel > 0;
@@ -248,6 +252,10 @@ function render(sessions) {
   prevActive = active;
 }
 tick(); setInterval(tick, 2000);
+// 行数独立执行:首次渲染可能早于 pywebview 桥注入(?. 静默吞掉 set_rows),
+// mock 等静态数据又不会触发重渲染——每轮兜底执行,Python 侧同值零开销
+setInterval(() => window.pywebview?.api?.set_rows(S.rows || 1), 2000);
+window.addEventListener("pywebviewready", () => { lastSig = ""; tick(); });
 
 const post = (url) => fetch(url, { method: "POST",
   headers: { "Content-Type": "application/json" }, body: "{}" });
