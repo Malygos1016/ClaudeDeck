@@ -59,7 +59,8 @@ const S = {
   total: 0,
   logoFrac: 0.04,     // logo 区宽度占屏比(实测更新)
   finaleAt: -1,       // 全绿转场启动时刻(shader 时间基),-1 = 无
-  sweepEnd: 0.5,      // 转场触发瞬间的黄带右边界快照(绿条收卷的终点)
+  sweepEnd: 0.5,      // 转场触发瞬间的红+黄总带右边界快照(绿条收卷终点)
+  sweepRed: 0.0,      // 快照中红/黄分界(残带按原色分段绘制)
   redPulseAt: -1,     // 红带首现的红脉冲时刻
   // 飞块独立通道:强度平滑(黄清零时 0.3s 淡出,方块原地飞完不瞬灭),
   // 生成区间在黄存续期跟随色带、清零后冻结
@@ -75,7 +76,7 @@ if (gl) {
   const FS = `precision mediump float;
 uniform float t; uniform vec2 r;
 uniform float uLogo, uRed, uYel, uFadeEnd, uFinale, uSweepEnd, uRedPulse;
-uniform float uSq, uSqB0, uSqB1;
+uniform float uSq, uSqB0, uSqB1, uSweepRed;
 
 float hash(float n) { return fract(sin(n) * 43758.5453); }
 
@@ -169,7 +170,9 @@ void main() {
       float edge = 2.0 / r.x;   // 收卷前沿(约 2px 利落切边)
       float wKeep = smoothstep(pxBar, pxBar + edge, uv.x)
                   * (1.0 - smoothstep(uSweepEnd - tr, uSweepEnd + tr, uv.x));
-      col = mix(col, yelC, wKeep * 0.8);  // 绿条越过快照末端后此窗口自然清空
+      // 残带按原色分段:红/黄分界之前是红,之后是黄(红→绿的 Esc 场景也被收卷)
+      float redPart = 1.0 - smoothstep(uSweepRed - tr, uSweepRed + tr, uv.x);
+      col = mix(col, mix(yelC, redC, redPart), wKeep * 0.8);
     } else {
       pxBar = 0.992;            // 右端停留
     }
@@ -208,7 +211,7 @@ void main() {
   gl.enableVertexAttribArray(loc); gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
   uniforms = Object.fromEntries(
     ["t", "r", "uLogo", "uRed", "uYel", "uFadeEnd", "uFinale", "uSweepEnd", "uRedPulse",
-     "uSq", "uSqB0", "uSqB1"]
+     "uSq", "uSqB0", "uSqB1", "uSweepRed"]
       .map((n) => [n, gl.getUniformLocation(prog, n)])
   );
   let last = 0, lastDraw = 0;
@@ -256,6 +259,7 @@ void main() {
       gl.uniform1f(uniforms.uSq, S.sqInt);
       gl.uniform1f(uniforms.uSqB0, S.sqB0);
       gl.uniform1f(uniforms.uSqB1, S.sqB1);
+      gl.uniform1f(uniforms.uSweepRed, S.sweepRed);
       gl.drawArrays(gl.TRIANGLES, 0, 3);
     }
     requestAnimationFrame(loop);
@@ -280,6 +284,42 @@ let lastSig = "";
 let prevActive = false;   // 上一轮是否存在红/黄(全绿转场的触发边沿)
 let prevRedCount = 0;     // 红带首现的脉冲边沿
 
+/* 粘性排序:被红/黄提到前面的会话,变绿后原地留守;只有新的红/黄提升
+   才把它往后挤。红插入红块末尾(红恒在黄前),黄插入活动块末尾。 */
+let order = [];                    // 持久显示顺序(session_id)
+const prevStatus = new Map();
+
+function promote(id, status, by) {
+  order = order.filter((x) => x !== id);
+  let idx = 0;
+  const isActive = (st) => st === "waiting" || st === "busy";
+  if (status === "waiting") {
+    while (idx < order.length && by.get(order[idx])?.status === "waiting") idx++;
+  } else {
+    while (idx < order.length && isActive(by.get(order[idx])?.status)) idx++;
+  }
+  order.splice(idx, 0, id);
+}
+
+function applyOrder(sessions) {
+  const by = new Map(sessions.map((s) => [s.session_id, s]));
+  order = order.filter((id) => by.has(id));
+  const known = new Set(order);
+  for (const s of sessions) {
+    if (known.has(s.session_id)) continue;
+    if (s.status === "waiting" || s.status === "busy") promote(s.session_id, s.status, by);
+    else order.push(s.session_id);   // 新的空闲会话排队尾
+  }
+  for (const s of sessions) {
+    const prev = prevStatus.get(s.session_id);
+    if (prev !== s.status && (s.status === "waiting" || s.status === "busy")) {
+      promote(s.session_id, s.status, by);   // 状态提升才移动;变绿不动
+    }
+    prevStatus.set(s.session_id, s.status);
+  }
+  return order.map((id) => by.get(id));
+}
+
 async function tick() {
   let sessions = MOCK;
   if (!sessions) {
@@ -299,7 +339,8 @@ function render(sessions) {
     prevActive = false;
     return;
   }
-  host.innerHTML = sessions.map((s) => {
+  const view = applyOrder(sessions);   // 粘性顺序(做完的原地留守)
+  host.innerHTML = view.map((s) => {
     const st = ["busy", "waiting", "idle"].includes(s.status) ? s.status : "idle";
     const label = s.tag || s.name || (s.session_id || "?").slice(0, 8);
     const cls = `cell${s.kind === "bg" ? " bg" : ""}${st === "waiting" ? " waiting" : ""}`;
@@ -336,9 +377,12 @@ function render(sessions) {
 
   const active = nRed + nYel > 0;
   if (prevActive && !active) {
-    // 全绿转场:拍下当前显示中的黄带右边界,常规带即刻交给快照(绿条收卷接管)
-    S.sweepEnd = S.logoFrac + S.dispYel * (1 - S.logoFrac);
+    // 全绿转场:拍下红+黄总带快照,常规带即刻交给收卷(红也是被绿条收走的)
+    const span = 1 - S.logoFrac;
+    S.sweepRed = S.logoFrac + S.dispRed * span;
+    S.sweepEnd = S.logoFrac + (S.dispRed + S.dispYel) * span;
     S.finaleAt = performance.now() / 1000;
+    S.dispRed = 0;
     S.dispYel = 0;
   }
   prevActive = active;
