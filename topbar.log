@@ -40,3 +40,11 @@ menu sid=023dfe51-0369-4977-93fe-b35fd7e138ad x=584
 menu sid=9016d3ac-7ffa-4cce-91df-2c31e92a043c x=534
 menu sid=f408d45f-662e-4dba-a9e9-587dabadb35c x=400
 menu sid=023dfe51-0369-4977-93fe-b35fd7e138ad x=666
+CCTopBar 窗口就位: 0,0 2560x32
+bar api keys: hide_menu,menu,open_deck,quit
+menu 页 showMenu: function
+menu sid=9016d3ac-7ffa-4cce-91df-2c31e92a043c x=544
+hide_menu
+hide_menu
+menu sid=023dfe51-0369-4977-93fe-b35fd7e138ad x=652
+hide_menu

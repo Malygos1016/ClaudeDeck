@@ -8,32 +8,34 @@
   html, body { height: 100%; overflow: hidden; background: #0e1218; }
   #gl { position: fixed; inset: 0; width: 100%; height: 100%; }
   #bar {
-    position: fixed; top: 0; left: 0; right: 0; height: var(--barh, 26px);
-    display: flex; align-items: center; gap: 7px;
+    position: fixed; inset: 0; display: flex; align-items: center; gap: 10px;
     padding: 0 10px; font-family: "Microsoft YaHei UI", "Segoe UI", sans-serif;
   }
   #brand {
     font-family: "Cascadia Code", Consolas, monospace; font-size: 11px;
-    color: #8d97a7; letter-spacing: 0.08em; cursor: pointer; flex: none;
+    color: #aeb7c4; letter-spacing: 0.08em; cursor: pointer; flex: none;
   }
   #brand b { color: #e2a13c; }
+  #cells { display: flex; gap: 7px; align-items: center; overflow: hidden; flex: 1; height: 100%; }
+  /* 两行模式:按列填充 → 红色堆左、黄色居中、绿色靠右(纵向排列) */
+  #cells.two-rows {
+    display: grid; grid-auto-flow: column;
+    grid-template-rows: repeat(2, 1fr); grid-auto-columns: max-content;
+    column-gap: 7px; row-gap: 0; align-items: center;
+  }
   .cell {
     display: inline-flex; align-items: center; gap: 6px; flex: none;
-    font-size: 12px; color: #c9d2df; line-height: 1;
+    font-size: 12px; color: #d5dce6; line-height: 1;
     padding: 3px 10px; border-radius: 999px; cursor: pointer;
-    background: rgba(18, 24, 33, 0.62); border: 1px solid rgba(160, 180, 210, 0.13);
-    backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
+    background: rgba(14, 19, 27, 0.72); border: 1px solid rgba(160, 180, 210, 0.14);
     box-shadow: inset 1px 1px 0 rgba(255, 255, 255, 0.06);
     transition: border-color 0.15s ease, filter 0.15s ease;
+    white-space: nowrap;
   }
-  /* 26px 高的条里禁用位移特效(会被窗口边缘剪掉),改纯发光 */
   .cell:hover { border-color: #e2a13c; filter: brightness(1.18); }
   .cell.bg { border-style: dashed; opacity: 0.7; cursor: default; }
-  .cell.waiting {
-    border-color: rgba(217, 112, 96, 0.7); color: #f0d7d2;
-    animation: breathe 1.6s ease-in-out infinite;
-  }
-  @keyframes breathe { 50% { box-shadow: 0 0 12px rgba(217, 112, 96, 0.45); } }
+  .cell.waiting { border-color: rgba(217, 112, 96, 0.8); color: #f4ddd8; animation: breathe 1.6s ease-in-out infinite; }
+  @keyframes breathe { 50% { box-shadow: 0 0 12px rgba(217, 112, 96, 0.5); } }
   .dot { width: 7px; height: 7px; border-radius: 50%; flex: none; }
   .dot.busy { background: #e2a13c; box-shadow: 0 0 7px rgba(226, 161, 60, 0.8); }
   .dot.waiting { background: #d97060; box-shadow: 0 0 7px rgba(217, 112, 96, 0.9); }
@@ -43,35 +45,103 @@
 </head>
 <body>
 <canvas id="gl"></canvas>
-<div id="bar"><span id="brand">CC<b>·</b>Deck</span><span class="empty" id="cells">连接中…</span></div>
+<div id="bar"><span id="brand">CC<b>·</b>Deck</span><div id="cells"><span class="empty">连接中…</span></div></div>
 <script>
 const $ = (id) => document.getElementById(id);
-// 条的逻辑高度 = 窗口收起时的内高。不能一次性快照:WebView2 里页面在窗体
-// 缩到最终 32px 之前就加载了(实翻车:条被定位到不可见的下方)。
-// 改为随 resize 动态同步,抽屉展开期间冻结。
-function syncBarH() {
-  document.documentElement.style.setProperty("--barh", `${window.innerHeight}px`);
-}
-window.addEventListener("resize", syncBarH);
-syncBarH();
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]));
 
-/* ---------- GLSL 背景:暗色极光缓流 + 波点 ---------- */
+/* ================= 状态(渲染层与 shader 共享) ================= */
+// 分区占比按窗口数量计:红=waiting 黄=busy 绿=idle
+const S = {
+  redFrac: 0, yelFrac: 0, total: 0,
+  logoFrac: 0.04,     // logo 区宽度占屏比(实测更新)
+  fadeEnd: 0.5,       // 飞块渐隐终点 = 最右 tag 位置 + 15% 屏宽
+  finaleAt: -1,       // 全绿转场的启动时刻(shader 时间基),-1 = 无
+};
+
+/* ================= GLSL:分区底色 + 黄区飞块 + 全绿转场 ================= */
 const canvas = $("gl");
 const gl = canvas.getContext("webgl", { antialias: false, alpha: false });
+let uniforms = null;
 if (gl) {
   const VS = "attribute vec2 p;void main(){gl_Position=vec4(p,0.,1.);}";
-  const FS = `precision mediump float;uniform float t;uniform vec2 r;
-  void main(){
-    vec2 uv = gl_FragCoord.xy / r;
-    vec3 col = mix(vec3(0.050,0.066,0.090), vec3(0.066,0.086,0.118), uv.x);
-    float w = sin(uv.x*5.0 - t*0.22) * sin(uv.x*2.3 + t*0.13);
-    col += vec3(0.886,0.631,0.235) * smoothstep(0.55, 1.0, w) * 0.055;
-    col += vec3(0.247,0.573,0.827) * smoothstep(0.6, 1.0, -w) * 0.045;
-    vec2 g = fract(gl_FragCoord.xy / 14.0) - 0.5;
-    col += smoothstep(0.16, 0.05, length(g)) * 0.028;
-    col *= 1.0 - 0.35 * pow(abs(uv.y - 0.5) * 2.0, 2.0);
-    gl_FragColor = vec4(col, 1.0);
-  }`;
+  const FS = `precision mediump float;
+uniform float t; uniform vec2 r;
+uniform float uLogo, uRed, uYel, uFadeEnd, uFinale;
+
+float hash(float n) { return fract(sin(n) * 43758.5453); }
+
+vec3 darkBase(vec2 uv) {
+  vec3 col = mix(vec3(0.050,0.066,0.090), vec3(0.066,0.086,0.118), uv.x);
+  float w = sin(uv.x*5.0 - t*0.22) * sin(uv.x*2.3 + t*0.13);
+  col += vec3(0.886,0.631,0.235) * smoothstep(0.55, 1.0, w) * 0.045;
+  col += vec3(0.247,0.573,0.827) * smoothstep(0.6, 1.0, -w) * 0.04;
+  vec2 g = fract(gl_FragCoord.xy / 14.0) - 0.5;
+  col += smoothstep(0.16, 0.05, length(g)) * 0.028;
+  return col;
+}
+
+void main() {
+  vec2 uv = gl_FragCoord.xy / r;
+  vec3 col = darkBase(uv);
+  vec3 redC = vec3(0.42, 0.11, 0.10);   // 红区底色(暗红)
+  vec3 yelC = vec3(0.40, 0.28, 0.07);   // 黄区底色(暗琥珀)
+
+  float span = max(1.0 - uLogo, 0.001);
+  float xx = (uv.x - uLogo) / span;     // logo 之后的归一化横坐标
+  float tr = 0.025;                      // 过渡半宽(前后合计约 5%)
+  float redEnd = uRed;
+  float yelEnd = uRed + uYel;
+
+  if (xx < 0.0) {
+    // logo 区:无条件继承最高优先级颜色
+    if (uRed > 0.001)      col = mix(col, redC, 0.8);
+    else if (uYel > 0.001) col = mix(col, yelC, 0.8);
+  } else {
+    float wRed = (uRed > 0.001) ? (1.0 - smoothstep(redEnd - tr, redEnd + tr, xx)) : 0.0;
+    float wYel = (uYel > 0.001)
+      ? smoothstep(redEnd - tr, redEnd + tr, xx) * (1.0 - smoothstep(yelEnd - tr, yelEnd + tr, xx))
+      : 0.0;
+    col = mix(col, redC, wRed * 0.8);
+    col = mix(col, yelC, wYel * 0.8);
+  }
+
+  // 黄区飞块:暗黄方块,生成时纵坐标随机抖动,水平直线右飞,向 uFadeEnd 渐隐
+  if (uYel > 0.001) {
+    float hs = clamp(r.y * 0.11, 3.0, 7.0); // 方块半边长(物理像素)
+    for (int i = 0; i < 9; i++) {
+      float fi = float(i);
+      float period = 1.4 + hash(fi * 7.13) * 1.3;
+      float phase = t / period + hash(fi * 3.31);
+      float cyc = fract(phase);
+      float gen = floor(phase);
+      float x0 = uLogo + (uRed + hash(fi * 5.77 + gen * 1.13) * uYel) * span;
+      float px = mix(x0, uFadeEnd, cyc);
+      float py = 0.22 + 0.56 * hash(fi * 9.21 + gen * 2.71);
+      vec2 d = abs(vec2((uv.x - px) * r.x, (uv.y - py) * r.y));
+      float inside = step(max(d.x, d.y), hs);
+      float alpha = (1.0 - cyc) * (1.0 - cyc) * 0.5;
+      col = mix(col, vec3(0.62, 0.44, 0.12), inside * alpha);
+    }
+  }
+
+  // 全绿转场:一块缓动飞到屏幕最右 → 整条闪绿 → 回深色
+  if (uFinale >= 0.0) {
+    float ft = t - uFinale;
+    if (ft < 0.9) {
+      float p = clamp(ft / 0.85, 0.0, 1.0);
+      p = 1.0 - pow(1.0 - p, 3.0);       // ease-out
+      float px = mix(uLogo + 0.05, 0.995, p);
+      float hs2 = clamp(r.y * 0.13, 3.0, 8.0);
+      vec2 d2 = abs(vec2((uv.x - px) * r.x, (uv.y - 0.5) * r.y));
+      col = mix(col, vec3(0.35, 0.75, 0.5), step(max(d2.x, d2.y), hs2) * 0.85);
+    }
+    float fl = smoothstep(0.75, 1.0, ft) * (1.0 - smoothstep(1.05, 1.7, ft));
+    col = mix(col, vec3(0.10, 0.36, 0.24), fl * 0.65);
+  }
+
+  gl_FragColor = vec4(col, 1.0);
+}`;
   const sh = (type, src) => { const s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s); return s; };
   const prog = gl.createProgram();
   gl.attachShader(prog, sh(gl.VERTEX_SHADER, VS));
@@ -82,35 +152,71 @@ if (gl) {
   gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1, 3,-1, -1,3]), gl.STATIC_DRAW);
   const loc = gl.getAttribLocation(prog, "p");
   gl.enableVertexAttribArray(loc); gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
-  const uT = gl.getUniformLocation(prog, "t"), uR = gl.getUniformLocation(prog, "r");
-  const draw = (ms) => {
-    if (canvas.width !== innerWidth || canvas.height !== innerHeight) {
-      canvas.width = innerWidth; canvas.height = innerHeight;
-      gl.viewport(0, 0, canvas.width, canvas.height);
-    }
-    gl.uniform1f(uT, ms / 1000); gl.uniform2f(uR, canvas.width, canvas.height);
-    gl.drawArrays(gl.TRIANGLES, 0, 3);
-  };
+  uniforms = Object.fromEntries(
+    ["t", "r", "uLogo", "uRed", "uYel", "uFadeEnd", "uFinale"].map((n) => [n, gl.getUniformLocation(prog, n)])
+  );
   let last = 0;
-  (function loop(ms) { if (ms - last > 50) { last = ms; draw(ms); } requestAnimationFrame(loop); })(0); // ~20fps 够流动且省 GPU
+  const FRAME_MS = 33; // 有动效跑 30fps;纯深色时降到 5fps 省 GPU
+  (function loop(ms) {
+    const active = S.redFrac > 0 || S.yelFrac > 0 || S.finaleAt >= 0;
+    if (ms - last > (active ? FRAME_MS : 200)) {
+      last = ms;
+      if (canvas.width !== innerWidth || canvas.height !== innerHeight) {
+        canvas.width = innerWidth; canvas.height = innerHeight;
+        gl.viewport(0, 0, canvas.width, canvas.height);
+      }
+      const tSec = ms / 1000;
+      if (S.finaleAt >= 0 && tSec - S.finaleAt > 2.0) S.finaleAt = -1;
+      gl.uniform1f(uniforms.t, tSec);
+      gl.uniform2f(uniforms.r, canvas.width, canvas.height);
+      gl.uniform1f(uniforms.uLogo, S.logoFrac);
+      gl.uniform1f(uniforms.uRed, S.redFrac);
+      gl.uniform1f(uniforms.uYel, S.yelFrac);
+      gl.uniform1f(uniforms.uFadeEnd, S.fadeEnd);
+      gl.uniform1f(uniforms.uFinale, S.finaleAt);
+      gl.drawArrays(gl.TRIANGLES, 0, 3);
+    }
+    requestAnimationFrame(loop);
+  })(0);
 }
 
-/* ---------- 数据与格子 ---------- */
-const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]));
+/* ================= 数据与格子 ================= */
+// 调试:?mock=r1y3g8 → 伪造 1 红 3 黄 8 绿,便于无真实红灯时验收视觉
+const MOCK = (() => {
+  const m = new URLSearchParams(location.search).get("mock");
+  if (!m) return null;
+  const g = /r(\d+)y(\d+)g(\d+)/.exec(m);
+  if (!g) return null;
+  const mk = (n, status) => Array.from({ length: +n }, (_, i) => ({
+    session_id: `${status}-${i}`, name: `${status}-会话-${i}`, status,
+    kind: "interactive", tag: i === 0 && status === "busy" ? "演示标签" : null,
+  }));
+  return [...mk(g[1], "waiting"), ...mk(g[2], "busy"), ...mk(g[3], "idle")];
+})();
+
 let lastSig = "";
+let prevActive = false; // 上一帧是否存在红/黄(全绿转场的触发边沿)
 
 async function tick() {
-  let sessions = null;
-  try { sessions = (await (await fetch("/api/live")).json()).sessions; } catch {}
+  let sessions = MOCK;
+  if (!sessions) {
+    try { sessions = (await (await fetch("/api/live")).json()).sessions; } catch { sessions = null; }
+  }
   const sig = JSON.stringify(sessions);
   if (sig !== lastSig) { lastSig = sig; render(sessions); }
 }
 
 function render(sessions) {
   const host = $("cells");
-  if (!sessions) { host.outerHTML = '<span class="empty" id="cells">ClaudeDeck 服务未运行</span>'; return; }
-  if (!sessions.length) { host.outerHTML = '<span class="empty" id="cells">没有运行中的会话</span>'; return; }
-  const html = sessions.map((s) => {
+  if (!sessions || !sessions.length) {
+    host.classList.remove("two-rows");
+    host.innerHTML = `<span class="empty">${sessions ? "没有运行中的会话" : "ClaudeDeck 服务未运行"}</span>`;
+    window.pywebview?.api?.set_rows(1);
+    S.redFrac = S.yelFrac = 0; S.total = 0;
+    prevActive = false;
+    return;
+  }
+  host.innerHTML = sessions.map((s) => {
     const st = ["busy", "waiting", "idle"].includes(s.status) ? s.status : "idle";
     const label = s.tag || s.name || (s.session_id || "?").slice(0, 8);
     const cls = `cell${s.kind === "bg" ? " bg" : ""}${st === "waiting" ? " waiting" : ""}`;
@@ -118,12 +224,35 @@ function render(sessions) {
       data-label="${esc(label)}" data-tag="${esc(s.tag || "")}" title="${esc(s.cwd || "")}">
       <span class="dot ${st}"></span>${esc(label)}</span>`;
   }).join("");
-  host.outerHTML = `<span id="cells" style="display:flex;gap:7px;align-items:center;overflow:hidden">${html}</span>`;
+
+  // 换行判定:单行放不下 → 两行网格(按列填充),原生窗口同步倍高
+  host.classList.remove("two-rows");
+  const overflow = host.scrollWidth > host.clientWidth + 1;
+  if (overflow) host.classList.add("two-rows");
+  window.pywebview?.api?.set_rows(overflow ? 2 : 1);
+
+  // shader 状态:占比 / logo 宽 / 渐隐终点 / 全绿转场边沿
+  const n = sessions.length;
+  const nRed = sessions.filter((s) => s.status === "waiting").length;
+  const nYel = sessions.filter((s) => s.status === "busy").length;
+  S.total = n;
+  S.redFrac = nRed / n;
+  S.yelFrac = nYel / n;
+  S.logoFrac = Math.min(0.12, ($("brand").offsetWidth + 14) / innerWidth);
+  const cellEls = host.querySelectorAll(".cell");
+  let rightmost = 0.3;
+  if (cellEls.length) {
+    rightmost = Math.max(...[...cellEls].map((el) => el.getBoundingClientRect().right)) / innerWidth;
+  }
+  S.fadeEnd = Math.min(1, rightmost + 0.15);
+  const active = nRed + nYel > 0;
+  if (prevActive && !active) S.finaleAt = performance.now() / 1000; // 全绿了:飞块+闪绿
+  prevActive = active;
 }
 tick(); setInterval(tick, 2000);
 
-const post = (url, body) => fetch(url, { method: body ? "PUT" : "POST",
-  headers: { "Content-Type": "application/json" }, body: JSON.stringify(body || {}) });
+const post = (url) => fetch(url, { method: "POST",
+  headers: { "Content-Type": "application/json" }, body: "{}" });
 
 document.addEventListener("click", (e) => {
   const cell = e.target.closest(".cell");
@@ -131,7 +260,7 @@ document.addEventListener("click", (e) => {
 });
 $("brand").addEventListener("click", () => window.pywebview?.api?.open_deck());
 
-/* ---------- 右键菜单:独立小弹窗窗口(主条永远 32px,不再加高) ---------- */
+/* 右键菜单:独立小弹窗窗口(主条不加高) */
 document.addEventListener("contextmenu", (e) => {
   e.preventDefault();
   const cell = e.target.closest(".cell");
@@ -142,7 +271,6 @@ document.addEventListener("contextmenu", (e) => {
     e.clientX
   );
 });
-
 </script>
 </body>
 </html>

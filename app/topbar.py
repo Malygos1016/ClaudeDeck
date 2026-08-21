@@ -174,7 +174,7 @@ def _run_webview(cfg) -> bool:
             mw.evaluate_js(f"showMenu({payload})")
             # 定位/显示走 pywebview 自己的调用(同一 GUI 线程队列,保序);
             # 直接 SetWindowPos 会与异步的 show() 竞态,表现为永远停在创建位置
-            mw.move(x, BAR_LOGICAL_H + 2)
+            mw.move(x, BAR_LOGICAL_H * state.get("rows", 1) + 2)
             mw.show()
 
             def _front():
@@ -190,6 +190,23 @@ def _run_webview(cfg) -> bool:
             mw = state.get("menu_win")
             if mw is not None:
                 mw.hide()
+
+        def set_rows(self, rows):
+            """标签一行放不下时换两行:窗口与 AppBar 占位同步倍高。"""
+            rows = 2 if int(rows) >= 2 else 1
+            if state.get("rows", 1) == rows:
+                return
+            state["rows"] = rows
+            h = bar_h * rows
+            abd = state.get("abd")
+            if abd is not None:
+                abd.rc.bottom = abd.rc.top + h
+                ctypes.windll.shell32.SHAppBarMessage(ABM_SETPOS, ctypes.byref(abd))
+            hwnd = state.get("hwnd")
+            if hwnd:
+                SWP_NOZORDER, SWP_NOACTIVATE = 0x0004, 0x0010
+                user32.SetWindowPos(hwnd, 0, 0, 0, screen_w, h, SWP_NOZORDER | SWP_NOACTIVATE)
+            print(f"rows={rows}")
 
     def on_shown():
         hwnd = user32.FindWindowW(None, "CCTopBar")
