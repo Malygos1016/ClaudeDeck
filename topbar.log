@@ -82,3 +82,6 @@ menu 页 showMenu: function
 CCTopBar 窗口就位: 0,0 2560x32
 bar api keys: hide_menu,menu,open_deck,quit,set_rows
 menu 页 showMenu: function
+CCTopBar 窗口就位: 0,0 2560x32
+bar api keys: hide_menu,menu,open_deck,quit,set_rows
+menu 页 showMenu: function

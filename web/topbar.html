@@ -207,14 +207,15 @@ void main() {
       .map((n) => [n, gl.getUniformLocation(prog, n)])
   );
   let last = 0, lastDraw = 0;
-  const FRAME_MS = 33; // 有动效跑 30fps;纯深色静止时降到 5fps 省 GPU
+  // 动效期不节流:rAF 由垂直同步驱动,天然锁在屏幕刷新率(180Hz 屏即 180fps),
+  // 无需显式获取;静止时降到 5fps 省 GPU。平滑器按 dt 计算,帧率无关。
   (function loop(ms) {
     const animating =
       S.redFrac > 0.001 || S.yelFrac > 0.001 ||
       S.dispRed > 0.004 || S.dispYel > 0.004 ||
       Math.abs(S.dispFade - S.fadeEnd) > 0.005 ||
       S.finaleAt >= 0 || S.redPulseAt >= 0;
-    if (ms - last > (animating ? FRAME_MS : 200)) {
+    if (ms - last >= (animating ? 0 : 200)) {
       last = ms;
       const dt = Math.min((ms - lastDraw) / 1000 || 0.033, 0.25);
       lastDraw = ms;
