@@ -12,16 +12,17 @@
     display: flex; align-items: center; gap: 7px;
     padding: 0 10px; font-family: "Microsoft YaHei UI", "Segoe UI", sans-serif;
   }
-  /* 抽屉:窗口弹性加高后,在条下方展开的面板(菜单/改名共用) */
+  /* 抽屉层本身透明(原生窗口按 panel 矩形做区域裁剪,只有卡片可见) */
   #drawer {
     position: fixed; top: var(--barh, 26px); left: 0; right: 0; bottom: 0;
     display: none; align-items: flex-start;
     font-family: "Microsoft YaHei UI", "Segoe UI", sans-serif;
-    background: linear-gradient(180deg, rgba(10, 14, 20, 0.88), rgba(10, 14, 20, 0.96));
-    border-top: 1px solid rgba(160, 180, 210, 0.14);
-    backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
   }
-  #drawer .panel { padding: 8px; }
+  #drawer .panel {
+    padding: 6px; margin-top: 2px; width: max-content;
+    background: rgba(13, 17, 24, 0.97);
+    border: 1px solid rgba(160, 180, 210, 0.18); border-radius: 10px;
+  }
   #brand {
     font-family: "Cascadia Code", Consolas, monospace; font-size: 11px;
     color: #8d97a7; letter-spacing: 0.08em; cursor: pointer; flex: none;
@@ -162,11 +163,13 @@ $("brand").addEventListener("click", () => window.pywebview?.api?.open_deck());
 const drawer = $("drawer");
 const panel = drawer.querySelector(".panel");
 
-function openDrawer(html, hLogical) {
+function openDrawer(html, hLogical, anchorX) {
   drawerOpen = true;
   panel.innerHTML = html;
   drawer.style.display = "flex";
-  window.pywebview?.api?.expand(hLogical);
+  panel.style.marginLeft = `${Math.max(4, Math.min((anchorX ?? 20) - 20, innerWidth - 300))}px`;
+  const r = panel.getBoundingClientRect();
+  window.pywebview?.api?.expand(hLogical, r.left, r.top, r.width, r.height);
 }
 
 function closeDrawer() {
@@ -185,9 +188,7 @@ document.addEventListener("contextmenu", (e) => {
   if (cell) items.push(`<div class="mi" data-act="rename" data-sid="${cell.dataset.sid}" data-tag="${esc(cell.dataset.tag)}" data-label="${esc(cell.dataset.label)}">🖊 重命名「${esc(cell.dataset.label)}」…</div><div class="sep"></div>`);
   items.push('<div class="mi" data-act="open">打开 ClaudeDeck</div>');
   items.push('<div class="mi" data-act="quit">关闭 CCTopBar</div>');
-  openDrawer(items.join(""), 160);
-  // 菜单贴着点击的横向位置,别让人视线跳
-  panel.style.marginLeft = `${Math.max(4, Math.min(e.clientX - 20, innerWidth - 260))}px`;
+  openDrawer(items.join(""), 170, e.clientX);
 });
 
 drawer.addEventListener("click", async (e) => {
@@ -200,13 +201,12 @@ drawer.addEventListener("click", async (e) => {
 });
 
 function openEditor(sid, cur, label) {
-  const left = panel.style.marginLeft;
+  const anchorX = parseFloat(panel.style.marginLeft || "20") + 20;
   openDrawer(
     `<input maxlength="60" value="${esc(cur || "")}" placeholder="重命名「${esc(label)}」,留空=清除">
      <div class="hint">回车保存 · Esc 取消</div>`,
-    130
+    130, anchorX
   );
-  panel.style.marginLeft = left;
   const input = panel.querySelector("input");
   input.focus(); input.select();
   input.onkeydown = async (e) => {
@@ -220,7 +220,11 @@ function openEditor(sid, cur, label) {
 }
 
 document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeDrawer(); });
-window.addEventListener("blur", closeDrawer); // 点到别的应用,抽屉自动收
+// 点到别的应用抽屉自动收;防抖复核——SetWindowRgn 等原生操作会造成一瞬的
+// 焦点抖动,立即关会让抽屉根本开不起来
+window.addEventListener("blur", () => {
+  setTimeout(() => { if (!document.hasFocus()) closeDrawer(); }, 250);
+});
 
 </script>
 </body>

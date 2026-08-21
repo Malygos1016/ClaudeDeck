@@ -148,6 +148,23 @@ def _run_webview(cfg) -> bool:
         SWP_NOZORDER, SWP_NOACTIVATE = 0x0004, 0x0010
         user32.SetWindowPos(hwnd, 0, 0, 0, screen_w, h_phys, SWP_NOZORDER | SWP_NOACTIVATE)
 
+    def _apply_region(card_phys: tuple[int, int, int, int] | None) -> None:
+        """可见区域 = 顶条 ∪ 菜单卡片;其余像素透明且点击穿透。
+
+        None = 只留顶条(收起态复位)。SetWindowRgn 后系统接管 region 句柄,不可 Delete。
+        """
+        hwnd = state.get("hwnd")
+        if not hwnd:
+            return
+        gdi32 = ctypes.windll.gdi32
+        rgn = gdi32.CreateRectRgn(0, 0, screen_w, bar_h)
+        if card_phys is not None:
+            x, y, w, h = card_phys
+            card = gdi32.CreateRoundRectRgn(x, y, x + w + 1, y + h + 1, 12, 12)
+            gdi32.CombineRgn(rgn, rgn, card, 2)  # RGN_OR
+            gdi32.DeleteObject(card)
+        user32.SetWindowRgn(hwnd, rgn, True)
+
     class Api:
         def open_deck(self):
             webbrowser.open(f"http://127.0.0.1:{port}/live.html")
@@ -156,11 +173,17 @@ def _run_webview(cfg) -> bool:
             for w in list(webview.windows):
                 w.destroy()
 
-        # 抽屉机制:菜单/改名框超出 32px 条,弹性加高窗口临时容纳(AppBar 占位不变)
-        def expand(self, h_logical):
-            _set_height(int(float(h_logical) * dpi / 96))
+        # 抽屉机制:菜单/改名框超出 32px 条 → 加高窗口 + 区域裁剪成"条+小卡片"
+        # (AppBar 占位始终 32px;卡片外像素不可见且点击穿透,不再是全宽黑带)
+        def expand(self, h_logical, x, y, w, h):
+            k = dpi / 96
+            print(f"expand h={h_logical} card=({x:.0f},{y:.0f},{w:.0f},{h:.0f})")
+            _set_height(int(float(h_logical) * k))
+            _apply_region((int(x * k), int(y * k), int(w * k), int(h * k)))
 
         def collapse(self):
+            print("collapse")
+            _apply_region(None)
             _set_height(bar_h)
 
     def on_shown():
