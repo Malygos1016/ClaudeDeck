@@ -51,19 +51,25 @@ const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]));
 
 /* ================= 状态(渲染层与 shader 共享) ================= */
-// 分区占比按窗口数量计:红=waiting 黄=busy 绿=idle
+// 出生点固定锚在黄带起点(最靠左),不随黄带宽窄伸缩:出生点越靠右飞行路程越短、
+// 特效量越少,固定在起点才能保证够长的一段路。终点仍是「最右格子右缘+15%」。
+const SPAWN_W = 0.04;   // 飞块出生区固定宽度(屏宽比例)
+
+// 分区边界一律是「该类格子右缘 ÷ 屏幕宽」的归一化位置,不是窗口数量占比——
+// 数量占比与飞块终点(像素布局)是两套坐标,混用会让飞块生成在终点右侧倒飞。
 const S = {
   // 目标值(轮询更新)与显示值(每帧指数平滑追踪,τ≈0.5s):色带缓动涨跌的机制
-  redFrac: 0, yelFrac: 0, fadeEnd: 0.5,
-  dispRed: 0, dispYel: 0, dispFade: 0.5,
-  total: 0,
-  logoFrac: 0.04,     // logo 区宽度占屏比(实测更新)
+  redEnd: 0, yelEnd: 0,          // 红/黄带右边界(0 = 无该色)
+  dispRedEnd: 0, dispYelEnd: 0,
+  fadeEnd: 0.5, dispFade: 0.5,   // 飞块终点 = 最右格子右缘 + 15% 屏宽
+  total: 0, nRed: 0, nYel: 0,
+  logoFrac: 0.04,     // logo 区宽度占屏比(实测更新;飞块不在此区出生)
   finaleAt: -1,       // 全绿转场启动时刻(shader 时间基),-1 = 无
   sweepEnd: 0.5,      // 转场触发瞬间的红+黄总带右边界快照(绿条收卷终点)
   sweepRed: 0.0,      // 快照中红/黄分界(残带按原色分段绘制)
   redPulseAt: -1,     // 红带首现的红脉冲时刻
   // 飞块独立通道:强度平滑(黄清零时 0.3s 淡出,方块原地飞完不瞬灭),
-  // 生成区间在黄存续期跟随色带、清零后冻结
+  // 出生区间在黄存续期跟随黄带起点、清零后冻结
   sqInt: 0, sqB0: 0.05, sqB1: 0.1,
 };
 
@@ -75,7 +81,7 @@ if (gl) {
   const VS = "attribute vec2 p;void main(){gl_Position=vec4(p,0.,1.);}";
   const FS = `precision mediump float;
 uniform float t; uniform vec2 r;
-uniform float uLogo, uRed, uYel, uFadeEnd, uFinale, uSweepEnd, uRedPulse;
+uniform float uRedEnd, uYelEnd, uFadeEnd, uFinale, uSweepEnd, uRedPulse;
 uniform float uSq, uSqB0, uSqB1, uSweepRed;
 
 float hash(float n) { return fract(sin(n) * 43758.5453); }
@@ -117,23 +123,22 @@ void main() {
   vec3 redC = vec3(0.42, 0.11, 0.10);   // 红区底色(暗红)
   vec3 yelC = vec3(0.40, 0.28, 0.07);   // 黄区底色(暗琥珀)
 
-  float span = max(1.0 - uLogo, 0.001);
   float tr = 0.025;                      // 过渡半宽(前后合计约 5%)
+  // 边界直接就是 JS 量出来的像素位置(该类最后一个格子右缘 ÷ 屏宽),不再由占比推算。
   // 首个有色带从 x=0 直接铺过 logo 区(无接缝):红带含 logo;无红时黄带含 logo
-  float rw = (uRed > 0.001) ? uLogo + uRed * span : 0.0;   // 红带右边界
-  float yw = (uYel > 0.001)
-    ? ((uRed > 0.001) ? rw + uYel * span : uLogo + uYel * span)
-    : rw;                                                   // 黄带右边界
-  float wRed = (uRed > 0.001) ? (1.0 - smoothstep(rw - tr, rw + tr, uv.x)) : 0.0;
+  float rw = uRedEnd;                    // 红带右边界,0 = 无红
+  float yw = uYelEnd;                    // 黄带右边界,等于 rw 即无黄
+  float wRed = (rw > 0.001) ? (1.0 - smoothstep(rw - tr, rw + tr, uv.x)) : 0.0;
   float wYel = 0.0;
-  if (uYel > 0.001) {
-    float startEdge = (uRed > 0.001) ? smoothstep(rw - tr, rw + tr, uv.x) : 1.0;
+  if (yw > rw + 0.001) {
+    float startEdge = (rw > 0.001) ? smoothstep(rw - tr, rw + tr, uv.x) : 1.0;
     wYel = startEdge * (1.0 - smoothstep(yw - tr, yw + tr, uv.x));
   }
   col = mix(col, redC, wRed * 0.8);
   col = mix(col, yelC, wYel * 0.8);
 
-  // 黄区飞块:生成时纵坐标随机抖动,ease-out 减速右飞,尾段减速时才渐隐;
+  // 黄区飞块:出生点固定在黄带起点一小段(宽度不随黄带伸缩,越靠左路程越长、
+  // 特效量越足),纵坐标随机抖动,ease-out 减速右飞,尾段减速时才渐隐;
   // 强度 uSq 独立于带宽平滑(黄清零→0.3s 原地淡出),几何用冻结区间 uSqB0/B1,
   // 任何转换(转红/转绿/finale)方块都不瞬灭
   float finT = (uFinale >= 0.0) ? (t - uFinale) : -1.0;
@@ -148,9 +153,11 @@ void main() {
       float phase = t / period + hash(fi * 3.31);
       float cyc = fract(phase);
       float gen = floor(phase);
-      float x0 = b0 + hash(fi * 5.77 + gen * 1.13) * max(b1 - b0, 0.02); // 黄带内生成
+      float x0 = b0 + hash(fi * 5.77 + gen * 1.13) * (b1 - b0);  // 固定出生区内
       float pe = 1.0 - pow(1.0 - cyc, 2.6);  // ease-out:末段自然减速
-      float px = mix(x0, uFadeEnd, pe);
+      // 终点保底落在出生点右侧:任何配比下都不会倒着往左飞
+      float dest = max(uFadeEnd, x0 + 0.12);
+      float px = mix(x0, dest, pe);
       float py = 0.22 + 0.56 * hash(fi * 9.21 + gen * 2.71);
       vec2 p = vec2((uv.x - px) * r.x, (uv.y - py) * r.y);
       float m = 1.0 - smoothstep(-1.0, 1.0, sdRoundBox(p, vec2(hs), hs * 0.45)); // 圆角
@@ -210,48 +217,57 @@ void main() {
   const loc = gl.getAttribLocation(prog, "p");
   gl.enableVertexAttribArray(loc); gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
   uniforms = Object.fromEntries(
-    ["t", "r", "uLogo", "uRed", "uYel", "uFadeEnd", "uFinale", "uSweepEnd", "uRedPulse",
+    ["t", "r", "uRedEnd", "uYelEnd", "uFadeEnd", "uFinale", "uSweepEnd", "uRedPulse",
      "uSq", "uSqB0", "uSqB1", "uSweepRed"]
       .map((n) => [n, gl.getUniformLocation(prog, n)])
   );
-  let last = 0, lastDraw = 0;
+  let last = 0, lastDraw = 0, lastMeasure = -1e9;
   // 动效期不节流:rAF 由垂直同步驱动,天然锁在屏幕刷新率(180Hz 屏即 180fps),
   // 无需显式获取;静止时降到 5fps 省 GPU。平滑器按 dt 计算,帧率无关。
   (function loop(ms) {
     const animating =
-      S.redFrac > 0.001 || S.yelFrac > 0.001 ||
-      S.dispRed > 0.004 || S.dispYel > 0.004 ||
+      S.nRed > 0 || S.nYel > 0 ||
+      S.dispRedEnd > 0.004 || S.dispYelEnd > 0.004 ||
       Math.abs(S.dispFade - S.fadeEnd) > 0.005 ||
       S.sqInt > 0.01 || S.finaleAt >= 0 || S.redPulseAt >= 0;
     if (ms - last >= (animating ? 0 : 200)) {
       last = ms;
       const dt = Math.min((ms - lastDraw) / 1000 || 0.033, 0.25);
       lastDraw = ms;
-      // 显示值指数追踪目标值(τ=0.5s):色带缓动涨跌;中途改目标天然平滑改道
+      // 显示值指数追踪目标值(τ=0.5s):色带边界缓动移动;中途改目标天然平滑改道
       const k = 1 - Math.exp(-dt / 0.5);
-      S.dispRed += (S.redFrac - S.dispRed) * k;
-      S.dispYel += (S.yelFrac - S.dispYel) * k;
+      S.dispRedEnd += (S.redEnd - S.dispRedEnd) * k;
+      S.dispYelEnd += (S.yelEnd - S.dispYelEnd) * k;
       S.dispFade += (S.fadeEnd - S.dispFade) * k;
-      // 飞块强度独立淡入淡出(τ=0.3s);生成区间仅在黄存续期更新,清零后冻结
+      // 飞块强度独立淡入淡出(τ=0.3s);出生区间仅在黄存续期更新,清零后冻结
       const k2 = 1 - Math.exp(-dt / 0.3);
-      S.sqInt += ((S.yelFrac > 0.001 ? 1 : 0) - S.sqInt) * k2;
-      if (S.yelFrac > 0.001) {
-        const span = 1 - S.logoFrac;
-        S.sqB0 = Math.max(S.logoFrac, S.logoFrac + S.dispRed * span);
-        S.sqB1 = Math.max(S.sqB0 + 0.02, S.logoFrac + (S.dispRed + S.dispYel) * span);
+      // 出生点锚在黄带起点,宽度写死 SPAWN_W;黄带比它还窄就收到黄带右界,
+      // 不让方块溢出到绿区。logo 区不出生(否则盖住 CC·Deck 字样),
+      // 黄带整个落在 logo 区内时没有可出生的空间,索性不生成。
+      const spawnLeft = Math.max(S.logoFrac, S.dispRedEnd);
+      const hasYel = S.nYel > 0 && S.dispYelEnd > spawnLeft + 0.005;
+      S.sqInt += ((hasYel ? 1 : 0) - S.sqInt) * k2;
+      if (hasYel) {
+        S.sqB0 = spawnLeft;
+        S.sqB1 = Math.min(S.dispYelEnd, S.sqB0 + SPAWN_W);
       }
       if (canvas.width !== innerWidth || canvas.height !== innerHeight) {
         canvas.width = innerWidth; canvas.height = innerHeight;
         gl.viewport(0, 0, canvas.width, canvas.height);
+        measure();   // 尺寸变了几何全变;resize 事件不保证覆盖 DPI 变化与 AppBar 重排
+        lastMeasure = ms;
       }
+      // 定期重测兜底:render() 末尾那次跑在布局稳定之前(中文字形度量、AppBar 改高
+      // 都会让格子宽度事后变化,实测多会话时边界会停在只量到首个格子的错值)。
+      // 目标值改了也不会跳变——dispRedEnd/dispYelEnd/dispFade 会平滑追过去。
+      if (ms - lastMeasure > 250) { lastMeasure = ms; measure(); }
       const tSec = ms / 1000;
       if (S.finaleAt >= 0 && tSec - S.finaleAt > 3.2) S.finaleAt = -1;
       if (S.redPulseAt >= 0 && tSec - S.redPulseAt > 0.5) S.redPulseAt = -1;
       gl.uniform1f(uniforms.t, tSec);
       gl.uniform2f(uniforms.r, canvas.width, canvas.height);
-      gl.uniform1f(uniforms.uLogo, S.logoFrac);
-      gl.uniform1f(uniforms.uRed, S.dispRed);
-      gl.uniform1f(uniforms.uYel, S.dispYel);
+      gl.uniform1f(uniforms.uRedEnd, S.dispRedEnd);
+      gl.uniform1f(uniforms.uYelEnd, S.dispYelEnd);
       gl.uniform1f(uniforms.uFadeEnd, S.dispFade);
       gl.uniform1f(uniforms.uFinale, S.finaleAt);
       gl.uniform1f(uniforms.uSweepEnd, S.sweepEnd);
@@ -284,41 +300,73 @@ let lastSig = "";
 let prevActive = false;   // 上一轮是否存在红/黄(全绿转场的触发边沿)
 let prevRedCount = 0;     // 红带首现的脉冲边沿
 
-/* 粘性排序:被红/黄提到前面的会话,变绿后原地留守;只有新的红/黄提升
-   才把它往后挤。红插入红块末尾(红恒在黄前),黄插入活动块末尾。 */
-let order = [];                    // 持久显示顺序(session_id)
+/* 分组排序:每次状态变更就重排,严格 红→黄→绿 三段。黄色继续往前挤,
+   绿色不留在原地——同色必须连续,色带才能按像素贴合对应的格子。
+   组内稳定:红/黄按首次出现先后;绿按变绿时刻倒序(最近完成的靠左)。 */
+let order = [];                    // 持久出现顺序(session_id),组内稳定用
 const prevStatus = new Map();
-
-function promote(id, status, by) {
-  order = order.filter((x) => x !== id);
-  let idx = 0;
-  const isActive = (st) => st === "waiting" || st === "busy";
-  if (status === "waiting") {
-    while (idx < order.length && by.get(order[idx])?.status === "waiting") idx++;
-  } else {
-    while (idx < order.length && isActive(by.get(order[idx])?.status)) idx++;
-  }
-  order.splice(idx, 0, id);
-}
+const greenAt = new Map();         // session_id → 变绿时刻(绿组内排序用)
 
 function applyOrder(sessions) {
   const by = new Map(sessions.map((s) => [s.session_id, s]));
   order = order.filter((id) => by.has(id));
   const known = new Set(order);
+  for (const s of sessions) if (!known.has(s.session_id)) order.push(s.session_id);
+
+  const isIdle = (st) => st !== "waiting" && st !== "busy";
+  const now = performance.now();
   for (const s of sessions) {
-    if (known.has(s.session_id)) continue;
-    if (s.status === "waiting" || s.status === "busy") promote(s.session_id, s.status, by);
-    else order.push(s.session_id);   // 新的空闲会话排队尾
-  }
-  for (const s of sessions) {
-    const prev = prevStatus.get(s.session_id);
-    if (prev !== s.status && (s.status === "waiting" || s.status === "busy")) {
-      promote(s.session_id, s.status, by);   // 状态提升才移动;变绿不动
+    const isNew = !prevStatus.has(s.session_id);
+    if (prevStatus.get(s.session_id) !== s.status) {
+      // 首次出现就是空闲的不算「刚完成」,不记时刻 → 排在绿组末尾
+      if (isIdle(s.status) && !isNew) greenAt.set(s.session_id, now);
+      else greenAt.delete(s.session_id);
+      prevStatus.set(s.session_id, s.status);
     }
-    prevStatus.set(s.session_id, s.status);
   }
-  return order.map((id) => by.get(id));
+  for (const id of [...greenAt.keys()]) if (!by.has(id)) greenAt.delete(id);
+  for (const id of [...prevStatus.keys()]) if (!by.has(id)) prevStatus.delete(id);
+
+  const rank = (st) => (st === "waiting" ? 0 : st === "busy" ? 1 : 2);
+  // Array.sort 稳定(ES2019+):同 rank 未给比较结果时保持 order 的相对次序
+  return order
+    .map((id) => by.get(id))
+    .sort((a, b) => {
+      const d = rank(a.status) - rank(b.status);
+      if (d !== 0) return d;
+      if (rank(a.status) !== 2) return 0;
+      return (greenAt.get(b.session_id) ?? 0) - (greenAt.get(a.session_id) ?? 0);
+    });
 }
+
+/* 几何测量:色带边界与飞块终点全部按像素量,所以强依赖 innerWidth 与格子布局。
+   必须与数据渲染解耦、可重复调用——窗口尺寸在 pywebview 创建后还会被
+   on_shown 的 SetWindowPos 改一次,数据不变时 render() 不会再跑,
+   只在 render() 里量一次会让边界永久停在中间尺寸算出的错值(实测差一倍)。
+   状态从 DOM 的 .dot class 读,不依赖调用方传入会话数组。 */
+const GAP_HALF = 3.5;   // 格子间 gap 的一半,让边界落在空隙中点
+
+function measure() {
+  const W = innerWidth || 1;
+  const cells = [...$("cells").querySelectorAll(".cell")];
+  let redEnd = 0, yelEnd = 0, rightmost = 0;
+  for (const el of cells) {
+    const right = (el.getBoundingClientRect().right + GAP_HALF) / W;
+    const cls = el.querySelector(".dot")?.classList;
+    // 分组排序保证同色连续,所以「该类最后一个的右缘」就是「该类总长度」
+    if (cls?.contains("waiting")) redEnd = right;
+    else if (cls?.contains("busy")) yelEnd = right;
+    if (right > rightmost) rightmost = right;
+  }
+  S.logoFrac = Math.min(0.12, ($("brand").offsetWidth + 14) / W);
+  S.redEnd = Math.min(1, redEnd);
+  S.yelEnd = Math.min(1, Math.max(yelEnd, redEnd));   // 无黄时黄界=红界
+  // 飞块终点 = 最右侧格子(绿组在最右)右缘 + 15% 屏宽;占满则以屏幕最右为界。
+  // 0.3 只是量不到格子时的兜底默认,不是下限——当成下限会把单会话的终点顶到 0.45。
+  S.fadeEnd = Math.min(1, (cells.length ? rightmost : 0.3) + 0.15);
+}
+
+addEventListener("resize", measure);
 
 async function tick() {
   let sessions = MOCK;
@@ -335,7 +383,7 @@ function render(sessions) {
     host.classList.remove("two-rows");
     host.innerHTML = `<span class="empty">${sessions ? "没有运行中的会话" : "ClaudeDeck 服务未运行"}</span>`;
     window.pywebview?.api?.set_rows(1);
-    S.redFrac = S.yelFrac = 0; S.total = 0;
+    S.redEnd = S.yelEnd = 0; S.total = S.nRed = S.nYel = 0;
     prevActive = false;
     return;
   }
@@ -356,34 +404,24 @@ function render(sessions) {
   S.rows = overflow ? 2 : 1;
   window.pywebview?.api?.set_rows(S.rows);
 
-  // shader 状态:占比 / logo 宽 / 渐隐终点 / 全绿转场边沿
+  // shader 状态:计数给 shader 判活,几何交给 measure()(见其注释,必须能重复调用)
   const n = sessions.length;
-  const nRed = sessions.filter((s) => s.status === "waiting").length;
-  const nYel = sessions.filter((s) => s.status === "busy").length;
   S.total = n;
-  S.redFrac = nRed / n;
-  S.yelFrac = nYel / n;
-  S.logoFrac = Math.min(0.12, ($("brand").offsetWidth + 14) / innerWidth);
-  // 飞块终点 = 最右侧 tag(绿色组在最右)右缘 + 15% 屏宽;占满则以屏幕最右为界
-  const cellEls = [...host.querySelectorAll(".cell")];
-  let rightmost = 0.3;
-  if (cellEls.length) {
-    rightmost = Math.max(...cellEls.map((el) => el.getBoundingClientRect().right)) / innerWidth;
-  }
-  S.fadeEnd = Math.min(1, rightmost + 0.15);
+  S.nRed = sessions.filter((s) => s.status === "waiting").length;
+  S.nYel = sessions.filter((s) => s.status === "busy").length;
+  measure();
   // 红带首现:整条红脉冲
   if (prevRedCount === 0 && nRed > 0) S.redPulseAt = performance.now() / 1000;
   prevRedCount = nRed;
 
   const active = nRed + nYel > 0;
   if (prevActive && !active) {
-    // 全绿转场:拍下红+黄总带快照,常规带即刻交给收卷(红也是被绿条收走的)
-    const span = 1 - S.logoFrac;
-    S.sweepRed = S.logoFrac + S.dispRed * span;
-    S.sweepEnd = S.logoFrac + (S.dispRed + S.dispYel) * span;
+    // 全绿转场:拍下红+黄总带快照(边界即位置,直接取),常规带即刻交给收卷
+    S.sweepRed = S.dispRedEnd;
+    S.sweepEnd = S.dispYelEnd;
     S.finaleAt = performance.now() / 1000;
-    S.dispRed = 0;
-    S.dispYel = 0;
+    S.dispRedEnd = 0;
+    S.dispYelEnd = 0;
   }
   prevActive = active;
 }
