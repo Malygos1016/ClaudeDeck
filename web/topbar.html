@@ -1,4 +1,4 @@
-<!doctype html>
+﻿<!doctype html>
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
@@ -382,12 +382,12 @@ function render(sessions) {
   if (!sessions || !sessions.length) {
     host.classList.remove("two-rows");
     host.innerHTML = `<span class="empty">${sessions ? "没有运行中的会话" : "ClaudeDeck 服务未运行"}</span>`;
-    window.pywebview?.api?.set_rows(1);
+    window.pywebview?.api?.set_rows?.(1);
     S.redEnd = S.yelEnd = 0; S.total = S.nRed = S.nYel = 0;
     prevActive = false;
     return;
   }
-  const view = applyOrder(sessions);   // 粘性顺序(做完的原地留守)
+  const view = applyOrder(sessions);   // 分组重排:红→黄→绿,绿组按完成时刻倒序
   host.innerHTML = view.map((s) => {
     const st = ["busy", "waiting", "idle"].includes(s.status) ? s.status : "idle";
     const label = s.tag || s.name || (s.session_id || "?").slice(0, 8);
@@ -402,7 +402,7 @@ function render(sessions) {
   const overflow = host.scrollWidth > host.clientWidth + 1;
   if (overflow) host.classList.add("two-rows");
   S.rows = overflow ? 2 : 1;
-  window.pywebview?.api?.set_rows(S.rows);
+  window.pywebview?.api?.set_rows?.(S.rows);
 
   // shader 状态:计数给 shader 判活,几何交给 measure()(见其注释,必须能重复调用)
   const n = sessions.length;
@@ -411,10 +411,10 @@ function render(sessions) {
   S.nYel = sessions.filter((s) => s.status === "busy").length;
   measure();
   // 红带首现:整条红脉冲
-  if (prevRedCount === 0 && nRed > 0) S.redPulseAt = performance.now() / 1000;
-  prevRedCount = nRed;
+  if (prevRedCount === 0 && S.nRed > 0) S.redPulseAt = performance.now() / 1000;
+  prevRedCount = S.nRed;
 
-  const active = nRed + nYel > 0;
+  const active = S.nRed + S.nYel > 0;
   if (prevActive && !active) {
     // 全绿转场:拍下红+黄总带快照(边界即位置,直接取),常规带即刻交给收卷
     S.sweepRed = S.dispRedEnd;
@@ -428,7 +428,7 @@ function render(sessions) {
 tick(); setInterval(tick, 2000);
 // 行数独立执行:首次渲染可能早于 pywebview 桥注入(?. 静默吞掉 set_rows),
 // mock 等静态数据又不会触发重渲染——每轮兜底执行,Python 侧同值零开销
-setInterval(() => window.pywebview?.api?.set_rows(S.rows || 1), 2000);
+setInterval(() => window.pywebview?.api?.set_rows?.(S.rows || 1), 2000);
 window.addEventListener("pywebviewready", () => { lastSig = ""; tick(); });
 
 const post = (url) => fetch(url, { method: "POST",
