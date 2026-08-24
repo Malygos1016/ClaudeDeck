@@ -16,6 +16,29 @@ def test_strip_glyph_real_samples():
     assert strip_glyph("") == ""
 
 
+def test_strip_glyph_admin_prefix():
+    """管理员权限运行的终端,标签标题会多一截前缀,而且中英文两种都会出现。
+
+    2026-08-23 本机同时抓到:
+      'Administrator: ◐ Claudedeck本地安裝 ⑂ 我現在fork了…'
+      '管理员: ATTACH-TEST'
+    旧实现只剥开头的装饰符号,这两条开头都是文字,一个字符都剥不掉,
+    于是点击聚焦必然 404 —— 用户实报的「点击跳转完全失效」就有这一份。
+    """
+    assert strip_glyph("Administrator: ◐ Claudedeck本地安裝") == "Claudedeck本地安裝"
+    assert strip_glyph("管理员: ATTACH-TEST") == "ATTACH-TEST"
+    assert strip_glyph("管理員: ✳ 大書庫") == "大書庫"
+    assert strip_glyph("Administrator: ✳ 46953-e6") == "46953-e6"
+    # 不能误伤正常标题里本来就有的冒号
+    assert strip_glyph("✳ TODO: 修好色带") == "TODO: 修好色带"
+
+
+def test_match_tab_with_admin_prefix():
+    cands = ["Claudedeck本地安裝 ⑂ 我現在fork了", "46953-77"]
+    assert match_tab("Administrator: ◐ Claudedeck本地安裝 ⑂ 我現在fork了", cands)
+    assert match_tab("管理员: ◐ 46953-77", cands)
+
+
 def test_match_tab():
     cands = ["46953-e6", "设计非代码能力培养平台架构"]
     assert match_tab("✳ 46953-e6", cands)

@@ -31,6 +31,25 @@ def make_claude_json(cfg, projects=None):
     return p, data
 
 
+def test_attach_command_uses_attach_not_resume(cfg):
+    """接管无窗口的后台作业必须用 attach。
+
+    CC 有并发检测,对还活着的会话用 --resume 会让新实例直接退出;
+    attach 是把已在跑的界面接到终端上,不重启不打断(2026-08-23 实测)。
+    """
+    cmd = launcher.build_attach_command(cfg, r"C:\Work\proj", "f8d92a69")
+    assert "attach f8d92a69" in cmd
+    assert "--resume" not in cmd
+    assert "--fork-session" not in cmd
+    assert 'cd "C:\\Work\\proj"' in cmd
+
+
+def test_attach_command_without_cwd(cfg):
+    cmd = launcher.build_attach_command(cfg, None, "f8d92a69")
+    assert cmd.strip().endswith("attach f8d92a69")
+    assert "cd " not in cmd
+
+
 def test_ensure_trusted_touches_single_key_only(cfg):
     p, before = make_claude_json(cfg)
     assert ensure_trusted(cfg, r"C:\Work\proj") is True

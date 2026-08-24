@@ -88,6 +88,9 @@ def read_live_sessions(cfg: Config, *, include_stale: bool = False) -> dict:
                 "name_source": d.get("nameSource"),
                 "cwd": d.get("cwd"),
                 "kind": d.get("kind"),
+                # CC 预热的备用空壳:无对话内容,不该出现在任何界面上(2026-08-23 实测)
+                "spare": bool(d.get("spare")),
+                "job_id": d.get("jobId"),
                 "status": d.get("status"),
                 "status_seconds": max(0.0, (now_ms - updated) / 1000) if updated else None,
                 "started_at": ms_to_iso(started) if isinstance(started, (int, float)) else None,
@@ -120,6 +123,7 @@ def read_jobs(cfg: Config) -> dict:
             items.append(
                 {
                     "id": sub.name,
+                    "job_id": sub.name,   # attach 用的就是这个短 id(claude attach <id>)
                     "name": d.get("name"),
                     "state": d.get("state"),
                     "tempo": d.get("tempo"),

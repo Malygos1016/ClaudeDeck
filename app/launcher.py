@@ -77,6 +77,44 @@ def build_resume_command(
     return "; ".join(parts)
 
 
+def build_attach_command(cfg: Config, cwd: str | None, job_id: str) -> str:
+    """接管一个没有窗口的后台作业:``claude attach <jobId>``。
+
+    不能用 --resume:CC 的并发检测会让第二个实例直接退出。attach 是把守护进程
+    里已经在跑的界面接到当前终端上显示,作业本身不重启、不中断(2026-08-23 实测)。
+    该子命令没有出现在 `claude --help` 的命令列表里,属隐藏命令。
+    """
+    parts = []
+    if cwd:
+        parts.append(f'cd "{cwd}"')
+    parts.append(f'& "{cfg.claude_exe}" attach {job_id}')
+    return "; ".join(parts)
+
+
+def launch_attach(cfg: Config, cwd: str | None, job_id: str) -> dict:
+    """开一个 WT 新标签接管后台作业。复用 resume 那套坑已踩平的拉起链。"""
+    effective_cwd = cwd if cwd and os.path.isdir(cwd) else str(Path.home())
+    inner = build_attach_command(cfg, None, job_id)
+    env = _clean_child_env()
+    wt = shutil.which("wt.exe")
+    if wt:
+        args = [
+            wt, "new-tab", "--title", f"attach {job_id}", "-d", effective_cwd,
+            "powershell.exe", "-NoExit", "-Command", inner,
+        ]
+        subprocess.Popen(args, env=env)
+        used_wt = True
+    else:
+        subprocess.Popen(
+            ["powershell.exe", "-NoExit", "-Command", inner],
+            cwd=effective_cwd,
+            creationflags=CREATE_NEW_CONSOLE,
+            env=env,
+        )
+        used_wt = False
+    return {"ok": True, "used_wt": used_wt, "effective_cwd": effective_cwd, "job_id": job_id}
+
+
 def claude_json_path(cfg: Config) -> Path:
     # ~/.claude.json 与 ~/.claude 同级(不在 .claude 目录内)
     return cfg.claude_home_path.parent / ".claude.json"
