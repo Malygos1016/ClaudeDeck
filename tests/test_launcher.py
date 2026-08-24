@@ -31,6 +31,29 @@ def make_claude_json(cfg, projects=None):
     return p, data
 
 
+def test_resume_can_carry_display_name(cfg):
+    """恢复 fork 父分支时要能给窗口一个自己的名字。
+
+    fork 会把父会话的标题也改成带 ⑂ 的,于是恢复出来的窗口与 fork 分支的窗口
+    顶着同一个标题,聚焦按标题匹配必然跳错(用户实报:点父节点跳到了子分支的窗口)。
+    传 --name 让这个实例有独立显示名,标题就能区分开。
+    """
+    cmd = build_resume_command(cfg, None, "abc123", name="ClaudeDeck開發")
+    assert "--resume abc123" in cmd
+    assert '--name "ClaudeDeck開發"' in cmd
+
+
+def test_resume_without_name_unchanged(cfg):
+    cmd = build_resume_command(cfg, None, "abc123")
+    assert "--name" not in cmd
+
+
+def test_resume_name_quotes_are_neutralised(cfg):
+    """名字里的引号不能把命令行拆断。"""
+    cmd = build_resume_command(cfg, None, "abc123", name='a"b')
+    assert '--name "ab"' in cmd or '--name "a b"' in cmd
+
+
 def test_attach_command_uses_attach_not_resume(cfg):
     """接管无窗口的后台作业必须用 attach。
 

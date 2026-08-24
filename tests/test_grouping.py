@@ -60,6 +60,7 @@ def sess(sid: str, **over) -> dict:
         "spare": False,
         "alive": True,
         "status_seconds": 1.0,
+        "started_at": "2026-08-24T00:00:00.000Z",
         # 进程链上有没有终端祖先。kind 不能当窗口判据(见对应测试)
         "has_terminal": True,
     }
@@ -211,6 +212,55 @@ def test_fork_parent_action_is_resume():
     acts = {m["session_id"]: m["action"] for m in g["members"]}
     assert acts["p"] == "resume"   # 父:窗口已被子占,只能另开
     assert acts["c"] == "focus"    # 子:窗口里跑的就是它,跳过去即可
+
+
+def test_fork_parent_recovered_after_fork_is_focus_not_resume():
+    """父分支恢复过一次之后,它已经有自己的窗口了,再点该跳过去而不是又开一个。
+
+    用户实报点父节点不能跳转聚焦 —— 因为动作被写死成 resume,每点一次多一个窗口。
+    判据是实例的启动时刻:早于 fork 的那个,窗口已经切去跑子分支了;
+    晚于 fork 的那个,是恢复出来的,窗口显示的就是父分支本身。
+    """
+    parent = sess("p", tag="父", has_terminal=True, started_at="2026-08-24T03:00:00.000Z")
+    child = sess("c", kind="bg", has_terminal=False)
+    jobs = [{
+        "session_id": "c", "fork_parent_session_id": "p",
+        "fork_boundary_at": "2026-08-24T01:50:00.000Z",
+    }]
+    g = build_groups([parent, child], jobs=jobs)[0]
+    acts = {m["session_id"]: m["action"] for m in g["members"]}
+    assert acts["p"] == "focus"
+
+
+def test_fork_parent_started_before_fork_is_resume():
+    """fork 之前就在跑的父实例:窗口已被子分支占用,只能另开。"""
+    parent = sess("p", tag="父", has_terminal=True, started_at="2026-08-24T00:10:00.000Z")
+    child = sess("c", kind="bg", has_terminal=False)
+    jobs = [{
+        "session_id": "c", "fork_parent_session_id": "p",
+        "fork_boundary_at": "2026-08-24T01:50:00.000Z",
+    }]
+    g = build_groups([parent, child], jobs=jobs)[0]
+    assert {m["session_id"]: m["action"] for m in g["members"]}["p"] == "resume"
+
+
+def test_dedup_prefers_the_instance_that_owns_its_window():
+    """父会话两个实例并存时,留下真正显示父分支的那个(fork 之后恢复的),
+
+    而不是单纯取最近活跃 —— 用户在旧窗口(跑着子分支)里一动,旧实例就成了
+    最近活跃,父节点的动作会在 focus/resume 之间来回跳。
+    """
+    before = sess("p", pid=1, status_seconds=5, started_at="2026-08-24T00:10:00.000Z")
+    after = sess("p", pid=2, status_seconds=900, started_at="2026-08-24T03:00:00.000Z")
+    child = sess("c", kind="bg", has_terminal=False)
+    jobs = [{
+        "session_id": "c", "fork_parent_session_id": "p",
+        "fork_boundary_at": "2026-08-24T01:50:00.000Z",
+    }]
+    g = build_groups([before, after, child], jobs=jobs)[0]
+    parent_row = next(m for m in g["members"] if m["session_id"] == "p")
+    assert parent_row["pid"] == 2
+    assert parent_row["action"] == "focus"
 
 
 def test_plain_session_action_is_focus():

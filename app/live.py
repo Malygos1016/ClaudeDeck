@@ -180,6 +180,8 @@ def read_jobs(cfg: Config) -> dict:
                     "cwd": d.get("cwd"),
                     "session_id": d.get("sessionId"),
                     "fork_parent_session_id": d.get("forkParentSessionId"),
+                    # fork 发生的时刻:早于它启动的父实例,窗口已被子分支占用
+                    "fork_boundary_at": d.get("forkBoundaryAt"),
                     "created_at": d.get("createdAt"),
                     "updated_at": d.get("updatedAt"),
                 }

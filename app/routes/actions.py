@@ -12,7 +12,9 @@ from fastapi import APIRouter, Body, Depends, HTTPException, Request
 from .. import archive as archive_mod
 from .. import stats as stats_mod
 from ..launcher import CwdMissing, launch_resume
+from ..grouping import FORK_MARK
 from ..live import read_jobs, read_live_sessions
+from ..tags import load_tags
 from . import request_db
 
 router = APIRouter(prefix="/api")
@@ -35,6 +37,23 @@ def _has_running_fork_child(cfg, sid: str) -> bool:
         if parent == want and child in live:
             return True
     return False
+
+
+def _recovered_branch_name(cfg, con: sqlite3.Connection, sid: str) -> str | None:
+    """恢复 fork 父分支时给窗口起的显示名;非 fork 父分支返回 None(不改名)。
+
+    fork 会把父会话的 ai-title 也改成带 ⑂ 的,不给个自己的名字,恢复出来的窗口
+    就与子分支的窗口同名,聚焦按标题匹配必然跳错(用户实报)。取用户打的 tag,
+    没有就取标题里叉子之前那截 —— 那才是这条分支本来的名字。
+    """
+    if not _has_running_fork_child(cfg, sid):
+        return None
+    key = sid.lower()
+    name = (load_tags(cfg).get(key) or "").strip()
+    if not name:
+        row = con.execute("SELECT title FROM sessions WHERE session_id=?", (key,)).fetchone()
+        name = ((row["title"] if row else "") or "").split(FORK_MARK)[0].strip()
+    return name or None
 
 
 def _srow(con: sqlite3.Connection, sid: str) -> sqlite3.Row:
@@ -78,6 +97,7 @@ def resume_session(
             row["cwd"],
             sid.lower(),
             fork=fork,
+            name=_recovered_branch_name(request.app.state.cfg, con, sid),
             use_home_fallback=use_home_fallback,
             provider=provider,
         )

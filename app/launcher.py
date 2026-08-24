@@ -53,7 +53,14 @@ PROVIDER_NOTES = {
 }
 
 
-def _resume_inner(cfg: Config, session_id: str, *, fork: bool, provider: str) -> str:
+def _safe_name(name: str) -> str:
+    """名字用于拼进 PowerShell 命令行,引号必须中和掉,否则命令被拆断。"""
+    return (name or "").replace('"', "").replace("`", "").strip()
+
+
+def _resume_inner(
+    cfg: Config, session_id: str, *, fork: bool, provider: str, name: str | None = None
+) -> str:
     if provider == "codex":
         return f"codex resume {session_id}"  # fork 概念不适用
     if provider == "pi":
@@ -63,17 +70,28 @@ def _resume_inner(cfg: Config, session_id: str, *, fork: bool, provider: str) ->
     inner = f'& "{cfg.claude_exe}" --resume {session_id}'
     if fork:
         inner += " --fork-session"
+    # 给这个实例一个显示名。恢复 fork 父分支时必须传:fork 会把父会话的标题也
+    # 改成带 ⑂ 的,不传的话恢复出来的窗口与子分支的窗口同名,聚焦按标题匹配
+    # 必然跳错(用户实报:点父节点跳到了子分支的窗口)。
+    safe = _safe_name(name) if name else ""
+    if safe:
+        inner += f' --name "{safe}"'
     return inner
 
 
 def build_resume_command(
-    cfg: Config, cwd: str | None, session_id: str, fork: bool = False, provider: str = "claude"
+    cfg: Config,
+    cwd: str | None,
+    session_id: str,
+    fork: bool = False,
+    provider: str = "claude",
+    name: str | None = None,
 ) -> str:
     """官方推荐形式:先 cd 再 resume,Windows 分隔符用 ';'(PowerShell)。"""
     parts = []
     if cwd:
         parts.append(f'cd "{cwd}"')
-    parts.append(_resume_inner(cfg, session_id, fork=fork, provider=provider))
+    parts.append(_resume_inner(cfg, session_id, fork=fork, provider=provider, name=name))
     return "; ".join(parts)
 
 
@@ -171,6 +189,7 @@ def launch_resume(
     fork: bool = False,
     use_home_fallback: bool = False,
     provider: str = "claude",
+    name: str | None = None,
 ) -> dict:
     """拉起 WT 新标签 resume 会话。返回 {ok, used_wt, trust_prewritten, effective_cwd, note}。"""
     is_claude = provider == "claude"
@@ -187,7 +206,7 @@ def launch_resume(
 
     trust_prewritten = ensure_trusted(cfg, effective_cwd) if is_claude else False
 
-    inner = _resume_inner(cfg, session_id, fork=fork, provider=provider)
+    inner = _resume_inner(cfg, session_id, fork=fork, provider=provider, name=name)
     title = f"{'resume' if is_claude else 'codex'} {session_id[:8]}"
     env = _clean_child_env()
     wt = shutil.which("wt.exe")

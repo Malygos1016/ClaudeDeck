@@ -14,6 +14,7 @@
 """
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any, Iterable
 
 FORK_MARK = "⑂"
@@ -49,19 +50,69 @@ def _fork_suffix(name: str) -> str:
 
 
 def _dedup_by_session(sessions: list[dict]) -> list[dict]:
-    """同一个会话只留一条,取最近活跃的那个实例。
+    """同一个会话只留一条实例。
 
-    一个会话可以同时开着多个窗口 —— 点 fork 父节点 resume 之后就是两个
+    一个会话可以同时开着多个窗口 —— 点 fork 父节点恢复之后就是两个
     (原窗口那个 + 新恢复的),这个状态是常态不是偶发。不去重的话树里会出现
     两条同名的父(用户实报:悬停时树上有三条)。
+
+    优先留「窗口显示的就是它自己」的那个(见 _owns_window),其次才比谁更近活跃。
+    只按活跃度挑会不稳:用户在旧窗口(跑着子分支)里一动,旧实例就成了最近活跃,
+    父节点的动作会在 跳转/恢复 之间来回跳。
     """
     best: dict[str, dict] = {}
     for s in sessions:
         sid = s.get("session_id")
         prev = best.get(sid)
-        if prev is None or _freshness(s) < _freshness(prev):
+        if prev is None or _instance_rank(s) < _instance_rank(prev):
             best[sid] = s          # dict 替换值不改变插入顺序,原有次序得以保留
     return list(best.values())
+
+
+def _instance_rank(s: dict) -> tuple[int, float]:
+    return (0 if s.get("owns_window") else 1, _freshness(s))
+
+
+def _iso_to_epoch(v: Any) -> float | None:
+    if not isinstance(v, str) or not v:
+        return None
+    try:
+        return datetime.fromisoformat(v.replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return None
+
+
+def _mark_window_ownership(sessions: list[dict], by_job: dict[str, dict]) -> None:
+    """标记每个实例的窗口是不是在显示它自己。
+
+    fork 是在父会话的窗口里就地发生的,那之后窗口跑的是子分支,父分支在里面
+    回不去了。所以早于 fork 启动的父实例并不真正拥有窗口;晚于 fork 启动的
+    (即恢复出来的那个)才拥有。判据用启动时刻与 fork 时刻比,不用窗口标题
+    —— 标题会被 fork 改写,本就不可信。
+    """
+    live_sids = {s.get("session_id") for s in sessions}
+    fork_parents: set[str] = set()
+    boundary: dict[str, float] = {}
+    for j in by_job.values():
+        parent = j.get("fork_parent_session_id")
+        if not parent or j.get("session_id") not in live_sids:
+            continue          # 子分支已经不在场,不影响父的窗口归属
+        fork_parents.add(parent)
+        at = _iso_to_epoch(j.get("fork_boundary_at"))
+        if at is not None:
+            boundary[parent] = min(at, boundary.get(parent, at))
+
+    for s in sessions:
+        owns = bool(s.get("has_terminal"))
+        sid = s.get("session_id")
+        if owns and sid in fork_parents:
+            at = boundary.get(sid)
+            started = _iso_to_epoch(s.get("started_at"))
+            # 起得比 fork 早 → 窗口已被子分支接管。
+            # 任一时间拿不到就保守视为被占:宁可多开一个窗口,也别把人送到
+            # 一个显示着别的分支的窗口前(那正是用户最初报的毛病)。
+            owns = at is not None and started is not None and started >= at
+        s["owns_window"] = owns
 
 
 def _freshness(s: dict) -> float:
@@ -108,6 +159,7 @@ def build_groups(sessions: list[dict], jobs: list[dict]) -> list[dict]:
         s for s in sessions
         if not s.get("spare") and s.get("entrypoint", "cli") != "sdk-cli"
     ]
+    _mark_window_ownership(live, by_job)
     live = _dedup_by_session(live)
     by_sid = {s.get("session_id"): s for s in live}
 
@@ -194,7 +246,8 @@ def _member_action(
     """
     sid = m.get("session_id")
     if sid == root_sid and has_fork_child:
-        return "resume"
+        # 恢复过一次之后父分支就有自己的窗口了,这时该跳过去而不是又开一个
+        return "focus" if m.get("owns_window") else "resume"
     if m.get("has_terminal"):
         return "focus"
     if sid != root_sid and has_window:
