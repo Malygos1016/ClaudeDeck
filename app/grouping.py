@@ -1,0 +1,281 @@
+"""会话分组:把「一个会话一个格子」改成「一个窗口一个格子」。
+
+设计见 docs/2026-08-23-session-tree-design.md。三条实测事实决定了这里的规则:
+
+1. CC 会预热 ``spare: true`` 的空壳进程等着接下一轮活,里面一句话都没有。
+   顶栏把它画成格子,就是用户看到的「多出来的那个块」。直接丢弃。
+2. fork 出的会话是脱离终端的守护进程(进程链挂在 services.exe 下),但 fork
+   是在父会话的窗口里就地发生的,窗口标题被改成了子会话的名字。父子物理上
+   共用一个窗口,因此必须合成一个格子,且点击要去激活持有窗口的父。
+3. 作业的 ``tempo=blocked`` / ``needs`` 与会话注册表的 ``waiting`` 是两套词汇,
+   都表示「在等用户」,要映射到同一盏红灯,否则卡住的后台作业亮的是绿灯。
+
+本模块只做纯数据变换,不碰文件系统、不碰 UI —— 便于单测覆盖全部分支。
+"""
+from __future__ import annotations
+
+from datetime import datetime
+from typing import Any, Iterable
+
+FORK_MARK = "⑂"
+
+# 一个窗口一盏灯:取窗口内最紧急的状态。数字越小越紧急。
+STATUS_RANK = {"waiting": 0, "busy": 1, "idle": 2}
+_UNKNOWN_RANK = 3
+
+LABEL_LIMIT = 24        # 顶栏格子上的字数上限;超出撑爆顶栏并带偏色带几何
+ELLIPSIS = "…"
+
+
+def truncate_label(text: str, limit: int = LABEL_LIMIT) -> str:
+    """超长名字截断。CC 给 fork 会话的 name 直接是用户输入的整句 prompt。"""
+    t = (text or "").strip()
+    return t if len(t) <= limit else t[:limit] + ELLIPSIS
+
+
+def display_label(session: dict) -> str:
+    """单个会话的显示名:用户打的 tag > 索引出的标题 > CC 派生的名字。"""
+    for key in ("tag", "title", "name"):
+        v = (session.get(key) or "").strip()
+        if v:
+            return v
+    return (session.get("session_id") or "?")[:8]
+
+
+def _fork_suffix(name: str) -> str:
+    """取 fork 名字里叉子后面那一截(可自定义的部分)。"""
+    if FORK_MARK in name:
+        return name.split(FORK_MARK, 1)[1].strip()
+    return name.strip()
+
+
+def _dedup_by_session(sessions: list[dict]) -> list[dict]:
+    """同一个会话只留一条实例。
+
+    一个会话可以同时开着多个窗口 —— 点 fork 父节点恢复之后就是两个
+    (原窗口那个 + 新恢复的),这个状态是常态不是偶发。不去重的话树里会出现
+    两条同名的父(用户实报:悬停时树上有三条)。
+
+    优先留「窗口显示的就是它自己」的那个(见 _owns_window),其次才比谁更近活跃。
+    只按活跃度挑会不稳:用户在旧窗口(跑着子分支)里一动,旧实例就成了最近活跃,
+    父节点的动作会在 跳转/恢复 之间来回跳。
+    """
+    best: dict[str, dict] = {}
+    for s in sessions:
+        sid = s.get("session_id")
+        prev = best.get(sid)
+        if prev is None or _instance_rank(s) < _instance_rank(prev):
+            best[sid] = s          # dict 替换值不改变插入顺序,原有次序得以保留
+    return list(best.values())
+
+
+def _instance_rank(s: dict) -> tuple[int, float]:
+    return (0 if s.get("owns_window") else 1, _freshness(s))
+
+
+def _iso_to_epoch(v: Any) -> float | None:
+    if not isinstance(v, str) or not v:
+        return None
+    try:
+        return datetime.fromisoformat(v.replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return None
+
+
+def _mark_window_ownership(sessions: list[dict], by_job: dict[str, dict]) -> None:
+    """标记每个实例的窗口是不是在显示它自己。
+
+    fork 是在父会话的窗口里就地发生的,那之后窗口跑的是子分支,父分支在里面
+    回不去了。所以早于 fork 启动的父实例并不真正拥有窗口;晚于 fork 启动的
+    (即恢复出来的那个)才拥有。判据用启动时刻与 fork 时刻比,不用窗口标题
+    —— 标题会被 fork 改写,本就不可信。
+    """
+    live_sids = {s.get("session_id") for s in sessions}
+    fork_parents: set[str] = set()
+    boundary: dict[str, float] = {}
+    for j in by_job.values():
+        parent = j.get("fork_parent_session_id")
+        if not parent or j.get("session_id") not in live_sids:
+            continue          # 子分支已经不在场,不影响父的窗口归属
+        fork_parents.add(parent)
+        at = _iso_to_epoch(j.get("fork_boundary_at"))
+        if at is not None:
+            boundary[parent] = min(at, boundary.get(parent, at))
+
+    for s in sessions:
+        owns = bool(s.get("has_terminal"))
+        sid = s.get("session_id")
+        if owns and sid in fork_parents:
+            at = boundary.get(sid)
+            started = _iso_to_epoch(s.get("started_at"))
+            # 起得比 fork 早 → 窗口已被子分支接管。
+            # 任一时间拿不到就保守视为被占:宁可多开一个窗口,也别把人送到
+            # 一个显示着别的分支的窗口前(那正是用户最初报的毛病)。
+            owns = at is not None and started is not None and started >= at
+        s["owns_window"] = owns
+
+
+def _freshness(s: dict) -> float:
+    """距上次状态更新的秒数,越小越新。缺数据的排在有数据的后面。"""
+    v = s.get("status_seconds")
+    return float(v) if isinstance(v, (int, float)) else float("inf")
+
+
+def _job_index(jobs: Iterable[dict]) -> dict[str, dict]:
+    return {j["session_id"]: j for j in jobs if j.get("session_id")}
+
+
+def _job_wants_attention(job: dict | None) -> bool:
+    """作业是否在等用户。blocked 与 needs 都算,两者 CC 会各用一个。"""
+    if not job:
+        return False
+    return bool(job.get("tempo") == "blocked" or (job.get("needs") or "").strip())
+
+
+def _member_status(session: dict, job: dict | None) -> str:
+    if _job_wants_attention(job):
+        return "waiting"
+    return session.get("status") or "idle"
+
+
+def _rank(status: str) -> int:
+    return STATUS_RANK.get(status, _UNKNOWN_RANK)
+
+
+def build_groups(sessions: list[dict], jobs: list[dict]) -> list[dict]:
+    """把活跃会话按「所属窗口」聚成组。
+
+    sessions 取 ``read_live_sessions()`` 的形状,jobs 取 ``read_jobs()`` 的形状。
+    返回的每一组就是顶栏上的一个格子,``members`` 是悬停展开的那棵树。
+    """
+    by_job = _job_index(jobs)
+
+    # 1. 丢掉不该占格子的:
+    #    - spare 空壳:CC 预热的备用进程,没有对话内容,点了也没有意义
+    #    - 脚本/SDK 派生的一次性会话(entrypoint=sdk-cli):用户没主动开、没有窗口
+    #      可跳、跑完即退。实例是 EdgeTracer 每处理一条收藏派生一个 `claude -p`,
+    #      显示出来只会不断闪现新格子(用户拍板不显示)。
+    live = [
+        s for s in sessions
+        if not s.get("spare") and s.get("entrypoint", "cli") != "sdk-cli"
+    ]
+    _mark_window_ownership(live, by_job)
+    live = _dedup_by_session(live)
+    by_sid = {s.get("session_id"): s for s in live}
+
+    # 2. 认领:fork 子挂到父所在的组;父不在场时(已退出)自己独立成组
+    parent_of: dict[str, str] = {}
+    for s in live:
+        sid = s.get("session_id")
+        job = by_job.get(sid)
+        pid_sid = (job or {}).get("fork_parent_session_id")
+        if pid_sid and pid_sid in by_sid:
+            parent_of[sid] = pid_sid
+
+    def root_of(sid: str) -> str:
+        seen = set()
+        cur = sid
+        while cur in parent_of and cur not in seen:
+            seen.add(cur)
+            cur = parent_of[cur]
+        return cur
+
+    buckets: dict[str, list[dict]] = {}
+    for s in live:
+        buckets.setdefault(root_of(s.get("session_id")), []).append(s)
+
+    groups: list[dict] = []
+    for root_sid, members in buckets.items():
+        root = by_sid[root_sid]
+        # 树里父在上、子缩进在下。入参沿用活跃会话的排序(忙的在前),
+        # fork 子多半是 busy,不重排就会画成父子颠倒。
+        members.sort(key=lambda m: 0 if m.get("session_id") == root_sid else 1)
+        # 持有窗口的判据是「进程链上有终端祖先」,不是 kind。
+        # kind=interactive 只说明不是 --bg 起的:EdgeTracer 的脚本会话也是
+        # interactive,却挂在 python.exe 下、根本没有终端(用户实报的误判)。
+        window_owner = next((m for m in members if m.get("has_terminal")), None)
+        has_window = window_owner is not None
+
+        statuses = [_member_status(m, by_job.get(m.get("session_id"))) for m in members]
+        status = min(statuses, key=_rank) if statuses else "idle"
+
+        # 重命名落到「叉子后面那截」所属的会话:有 fork 子就是最后一个子,
+        # 否则是自己。前半截是父的 tag,属于引用,不能在 fork 会话里改动。
+        forked = _forked_members(root, members, by_job)
+        rename_target = forked[-1] if forked else root
+
+        for m in members:
+            m["action"] = _member_action(m, root_sid, bool(forked), has_window, by_job)
+
+        full_label = _group_label(root, members, by_job)
+        attach_job_id = None
+        if not has_window:
+            job = by_job.get(root_sid)
+            attach_job_id = (job or {}).get("job_id")
+
+        groups.append(
+            {
+                "key": root_sid,
+                "label": truncate_label(full_label),
+                "full_label": full_label,
+                "status": status,
+                "has_window": has_window,
+                "focus_session_id": (window_owner or root).get("session_id"),
+                "rename_session_id": rename_target.get("session_id"),
+                "rename_hint": _fork_suffix(display_label(rename_target)),
+                "attach_job_id": attach_job_id,
+                "members": members,
+            }
+        )
+
+    groups.sort(key=lambda g: (_rank(g["status"]), g["label"]))
+    return groups
+
+
+def _member_action(
+    m: dict, root_sid: str, has_fork_child: bool, has_window: bool, by_job: dict[str, dict]
+) -> str:
+    """这一条点下去该做什么:focus(激活窗口) / resume(另开窗口) / attach(接管作业)。
+
+    fork 的父节点必须是 resume:fork 在父会话的窗口里就地发生,那个窗口现在跑的是
+    子分支,父分支在里面回不去了。而 fork 的意义正是一个上下文分支成两条各自推进,
+    父分支得能单独拉起来。
+
+    fork 的子节点仍是 focus —— 它自己是守护进程、没有终端祖先,但组里那个窗口
+    显示的正是它,所以判据要看「组有没有窗口」,不能只看成员自己。
+    """
+    sid = m.get("session_id")
+    if sid == root_sid and has_fork_child:
+        # 恢复过一次之后父分支就有自己的窗口了,这时该跳过去而不是又开一个
+        return "focus" if m.get("owns_window") else "resume"
+    if m.get("has_terminal"):
+        return "focus"
+    if sid != root_sid and has_window:
+        return "focus"
+    if (by_job.get(sid) or {}).get("job_id"):
+        return "attach"
+    return "resume"
+
+
+def _forked_members(root: dict, members: list[dict], by_job: dict[str, dict]) -> list[dict]:
+    """组内由 fork 产生的成员(不含根)。"""
+    return [
+        m for m in members
+        if m.get("session_id") != root.get("session_id")
+        and (by_job.get(m.get("session_id")) or {}).get("fork_parent_session_id")
+    ]
+
+
+def _group_label(root: dict, members: list[dict], by_job: dict[str, dict]) -> str:
+    """组的完整名字。
+
+    命名规则(用户拍板):``<父的 tag> ⑂ <fork 后可自定义的部分>``。
+    前半截取自父会话,是引用不是副本 —— 改父会话的 tag,所有子会话跟着变。
+    """
+    base = display_label(root)
+    forked = _forked_members(root, members, by_job)
+    if not forked:
+        return base
+    # 多重分叉时只展示最近一条的自定义部分,树里才逐条列全
+    suffix = _fork_suffix(display_label(forked[-1]))
+    return f"{base} {FORK_MARK} {suffix}" if suffix else f"{base} {FORK_MARK}"

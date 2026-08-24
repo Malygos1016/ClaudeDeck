@@ -53,7 +53,14 @@ PROVIDER_NOTES = {
 }
 
 
-def _resume_inner(cfg: Config, session_id: str, *, fork: bool, provider: str) -> str:
+def _safe_name(name: str) -> str:
+    """名字用于拼进 PowerShell 命令行,引号必须中和掉,否则命令被拆断。"""
+    return (name or "").replace('"', "").replace("`", "").strip()
+
+
+def _resume_inner(
+    cfg: Config, session_id: str, *, fork: bool, provider: str, name: str | None = None
+) -> str:
     if provider == "codex":
         return f"codex resume {session_id}"  # fork 概念不适用
     if provider == "pi":
@@ -63,18 +70,67 @@ def _resume_inner(cfg: Config, session_id: str, *, fork: bool, provider: str) ->
     inner = f'& "{cfg.claude_exe}" --resume {session_id}'
     if fork:
         inner += " --fork-session"
+    # 给这个实例一个显示名。恢复 fork 父分支时必须传:fork 会把父会话的标题也
+    # 改成带 ⑂ 的,不传的话恢复出来的窗口与子分支的窗口同名,聚焦按标题匹配
+    # 必然跳错(用户实报:点父节点跳到了子分支的窗口)。
+    safe = _safe_name(name) if name else ""
+    if safe:
+        inner += f' --name "{safe}"'
     return inner
 
 
 def build_resume_command(
-    cfg: Config, cwd: str | None, session_id: str, fork: bool = False, provider: str = "claude"
+    cfg: Config,
+    cwd: str | None,
+    session_id: str,
+    fork: bool = False,
+    provider: str = "claude",
+    name: str | None = None,
 ) -> str:
     """官方推荐形式:先 cd 再 resume,Windows 分隔符用 ';'(PowerShell)。"""
     parts = []
     if cwd:
         parts.append(f'cd "{cwd}"')
-    parts.append(_resume_inner(cfg, session_id, fork=fork, provider=provider))
+    parts.append(_resume_inner(cfg, session_id, fork=fork, provider=provider, name=name))
     return "; ".join(parts)
+
+
+def build_attach_command(cfg: Config, cwd: str | None, job_id: str) -> str:
+    """接管一个没有窗口的后台作业:``claude attach <jobId>``。
+
+    不能用 --resume:CC 的并发检测会让第二个实例直接退出。attach 是把守护进程
+    里已经在跑的界面接到当前终端上显示,作业本身不重启、不中断(2026-08-23 实测)。
+    该子命令没有出现在 `claude --help` 的命令列表里,属隐藏命令。
+    """
+    parts = []
+    if cwd:
+        parts.append(f'cd "{cwd}"')
+    parts.append(f'& "{cfg.claude_exe}" attach {job_id}')
+    return "; ".join(parts)
+
+
+def launch_attach(cfg: Config, cwd: str | None, job_id: str) -> dict:
+    """开一个 WT 新标签接管后台作业。复用 resume 那套坑已踩平的拉起链。"""
+    effective_cwd = cwd if cwd and os.path.isdir(cwd) else str(Path.home())
+    inner = build_attach_command(cfg, None, job_id)
+    env = _clean_child_env()
+    wt = shutil.which("wt.exe")
+    if wt:
+        args = [
+            wt, "new-tab", "--title", f"attach {job_id}", "-d", effective_cwd,
+            "powershell.exe", "-NoExit", "-Command", inner,
+        ]
+        subprocess.Popen(args, env=env)
+        used_wt = True
+    else:
+        subprocess.Popen(
+            ["powershell.exe", "-NoExit", "-Command", inner],
+            cwd=effective_cwd,
+            creationflags=CREATE_NEW_CONSOLE,
+            env=env,
+        )
+        used_wt = False
+    return {"ok": True, "used_wt": used_wt, "effective_cwd": effective_cwd, "job_id": job_id}
 
 
 def claude_json_path(cfg: Config) -> Path:
@@ -133,6 +189,7 @@ def launch_resume(
     fork: bool = False,
     use_home_fallback: bool = False,
     provider: str = "claude",
+    name: str | None = None,
 ) -> dict:
     """拉起 WT 新标签 resume 会话。返回 {ok, used_wt, trust_prewritten, effective_cwd, note}。"""
     is_claude = provider == "claude"
@@ -149,7 +206,7 @@ def launch_resume(
 
     trust_prewritten = ensure_trusted(cfg, effective_cwd) if is_claude else False
 
-    inner = _resume_inner(cfg, session_id, fork=fork, provider=provider)
+    inner = _resume_inner(cfg, session_id, fork=fork, provider=provider, name=name)
     title = f"{'resume' if is_claude else 'codex'} {session_id[:8]}"
     env = _clean_child_env()
     wt = shutil.which("wt.exe")

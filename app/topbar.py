@@ -15,6 +15,7 @@ import ctypes.wintypes as wt
 import json
 import sys
 import threading
+import time
 import urllib.request
 import webbrowser
 from pathlib import Path
@@ -144,9 +145,58 @@ def _run_webview(cfg) -> bool:
     # 菜单是独立小窗口:主条永远 32px。此前的"加高+SetWindowRgn 裁剪"方案已废——
     # WebView2 走 DirectComposition,区域裁剪对渲染无效,表现为全宽黑带(用户实报)。
     MENU_W, MENU_H = 300, 152  # 逻辑像素
+    # 会话树同理必须独立成窗;高度按成员数算,宽度固定
+    TREE_W, TREE_ROW_H, TREE_PAD = 420, 30, 14
 
     def _menu_hwnd() -> int:
         return user32.FindWindowW(None, "CCTopBarMenu")
+
+    def _tree_hwnd() -> int:
+        return user32.FindWindowW(None, "CCTopBarTree")
+
+    def _cursor_in(hwnd: int) -> bool:
+        if not hwnd or not user32.IsWindowVisible(hwnd):
+            return False
+        pt = wt.POINT()
+        user32.GetCursorPos(ctypes.byref(pt))
+        r = wt.RECT()
+        user32.GetWindowRect(hwnd, ctypes.byref(r))
+        return r.left <= pt.x < r.right and r.top <= pt.y < r.bottom
+
+    def _tree_should_stay() -> bool:
+        """鼠标还在顶栏或树上就不收。
+
+        用实际坐标判断,不用 WebView 的 mouseenter/mouseleave —— 顶栏与树是两个
+        独立窗口,鼠标在它们之间移动时事件顺序不可靠,实测会卡在「已进入树」
+        的状态而永不收起(用户实报)。
+        """
+        return _cursor_in(user32.FindWindowW(None, "CCTopBar")) or _cursor_in(_tree_hwnd())
+
+    def _notify_tree_closed() -> None:
+        """告诉顶栏页面树已经收了。不通知的话它仍以为树开着,
+        再次悬停同一个格子会被判重跳过 —— 移开再移回就不弹了(实测)。"""
+        bar = state.get("bar_win")
+        if bar is None:
+            return
+        try:
+            bar.evaluate_js("clearTreeKey && clearTreeKey()")
+        except Exception:
+            pass
+
+    def _tree_watchdog() -> None:
+        """兜底轮询:鼠标离开顶栏与树之后收起。前端的移出事件只负责快速响应。"""
+        while True:
+            time.sleep(0.25)
+            try:
+                if not state.get("tree_wanted") or _tree_should_stay():
+                    continue
+                state["tree_wanted"] = False
+                tw = state.get("tree_win")
+                if tw is not None:
+                    tw.hide()
+                _notify_tree_closed()
+            except Exception:
+                pass  # 轮询线程必须不死
 
     class Api:
         def open_deck(self):
@@ -190,6 +240,39 @@ def _run_webview(cfg) -> bool:
             mw = state.get("menu_win")
             if mw is not None:
                 mw.hide()
+
+        def tree(self, payload, anchor_x_logical, rows):
+            """悬停展开会话树:定位到格子下方并注入成员列表。
+
+            与菜单同构(独立窗口 + 同一 GUI 队列的 move/show),原因见 MENU_W 处注释。
+            """
+            tw = state.get("tree_win")
+            if tw is None or not _tree_hwnd():
+                return
+            state["tree_wanted"] = True
+            k = dpi / 96
+            h = int(rows) * TREE_ROW_H + TREE_PAD
+            x = int(max(0, min(float(anchor_x_logical) - 12, screen_w / k - TREE_W - 4)))
+            hwnd = _tree_hwnd()
+            GWL_EXSTYLE, WS_EX_TOOLWINDOW, WS_EX_APPWINDOW = -20, 0x00000080, 0x00040000
+            ex = user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
+            user32.SetWindowLongW(hwnd, GWL_EXSTYLE, (ex | WS_EX_TOOLWINDOW) & ~WS_EX_APPWINDOW)
+            tw.evaluate_js(f"showTree({json.dumps(payload, ensure_ascii=False)})")
+            tw.resize(TREE_W, h)
+            tw.move(x, BAR_LOGICAL_H * state.get("rows", 1) + 2)
+            tw.show()
+            print(f"tree rows={rows} x={x}")
+
+        def hide_tree(self):
+            # 鼠标已移到树上时不收 —— 两个独立窗口之间移动必然先触发顶栏的移出。
+            # 用坐标判断而非事件,理由见 _tree_should_stay。
+            if _tree_should_stay():
+                return
+            state["tree_wanted"] = False
+            tw = state.get("tree_win")
+            if tw is not None:
+                tw.hide()
+            _notify_tree_closed()
 
         def set_rows(self, rows):
             """标签一行放不下时换两行:窗口与 AppBar 占位同步倍高。"""
@@ -266,6 +349,14 @@ def _run_webview(cfg) -> bool:
             min_size=(100, 10), frameless=True, on_top=True,
             hidden=True, js_api=api, background_color="#10151d",
         )
+        state["tree_win"] = webview.create_window(
+            "CCTopBarTree",
+            url=f"http://127.0.0.1:{port}/topbar_tree.html",
+            x=0, y=bar_h, width=TREE_W, height=TREE_ROW_H * 2 + TREE_PAD,
+            min_size=(100, 10), frameless=True, on_top=True,
+            hidden=True, js_api=api, background_color="#10151d",
+        )
+        state["bar_win"] = win
         win.events.shown += on_shown
         win.events.closing += on_closing
 
@@ -279,6 +370,7 @@ def _run_webview(cfg) -> bool:
                 print(f"probe err: {e!r}")
 
         threading.Timer(6.0, _probe).start()
+        threading.Thread(target=_tree_watchdog, daemon=True).start()
         webview.start()
     except Exception as e:
         print(f"webview 壳失败: {e!r}")

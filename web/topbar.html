@@ -283,45 +283,52 @@ void main() {
 }
 
 /* ================= 数据与格子 ================= */
-// 调试:?mock=r1y3g8 → 伪造 1 红 3 黄 8 绿,便于无真实红灯时验收视觉
+// 调试:?mock=r1y3g8 → 伪造 1 红 3 黄 8 绿,便于无真实红灯时验收视觉。
+// 形状与 /api/live 的 groups 一致(一个窗口一个格子),不是原始会话列表。
 const MOCK = (() => {
   const m = new URLSearchParams(location.search).get("mock");
   if (!m) return null;
   const g = /r(\d+)y(\d+)g(\d+)/.exec(m);
   if (!g) return null;
-  const mk = (n, status) => Array.from({ length: +n }, (_, i) => ({
-    session_id: `${status}-${i}`, name: `${status}-会话-${i}`, status,
-    kind: "interactive", tag: i === 0 && status === "busy" ? "演示标签" : null,
-  }));
+  const mk = (n, status) => Array.from({ length: +n }, (_, i) => {
+    const label = i === 0 && status === "busy" ? "演示标签" : `${status}-会话-${i}`;
+    return {
+      key: `${status}-${i}`, label, full_label: label, status,
+      has_window: true, focus_session_id: `${status}-${i}`, attach_job_id: null,
+      members: [{ session_id: `${status}-${i}`, kind: "interactive", status }],
+    };
+  });
   return [...mk(g[1], "waiting"), ...mk(g[2], "busy"), ...mk(g[3], "idle")];
 })();
 
 let lastSig = "";
+let lastGroups = null;    // 悬停展开树时按 key 回查成员
 let prevActive = false;   // 上一轮是否存在红/黄(全绿转场的触发边沿)
 let prevRedCount = 0;     // 红带首现的脉冲边沿
 
 /* 分组排序:每次状态变更就重排,严格 红→黄→绿 三段。黄色继续往前挤,
    绿色不留在原地——同色必须连续,色带才能按像素贴合对应的格子。
-   组内稳定:红/黄按首次出现先后;绿按变绿时刻倒序(最近完成的靠左)。 */
-let order = [];                    // 持久出现顺序(session_id),组内稳定用
+   组内稳定:红/黄按首次出现先后;绿按变绿时刻倒序(最近完成的靠左)。
+   作用对象是「格子」(一个窗口一个),不是原始会话,故以 key 标识。 */
+let order = [];                    // 持久出现顺序(格子 key),组内稳定用
 const prevStatus = new Map();
-const greenAt = new Map();         // session_id → 变绿时刻(绿组内排序用)
+const greenAt = new Map();         // key → 变绿时刻(绿组内排序用)
 
 function applyOrder(sessions) {
-  const by = new Map(sessions.map((s) => [s.session_id, s]));
+  const by = new Map(sessions.map((s) => [s.key, s]));
   order = order.filter((id) => by.has(id));
   const known = new Set(order);
-  for (const s of sessions) if (!known.has(s.session_id)) order.push(s.session_id);
+  for (const s of sessions) if (!known.has(s.key)) order.push(s.key);
 
   const isIdle = (st) => st !== "waiting" && st !== "busy";
   const now = performance.now();
   for (const s of sessions) {
-    const isNew = !prevStatus.has(s.session_id);
-    if (prevStatus.get(s.session_id) !== s.status) {
+    const isNew = !prevStatus.has(s.key);
+    if (prevStatus.get(s.key) !== s.status) {
       // 首次出现就是空闲的不算「刚完成」,不记时刻 → 排在绿组末尾
-      if (isIdle(s.status) && !isNew) greenAt.set(s.session_id, now);
-      else greenAt.delete(s.session_id);
-      prevStatus.set(s.session_id, s.status);
+      if (isIdle(s.status) && !isNew) greenAt.set(s.key, now);
+      else greenAt.delete(s.key);
+      prevStatus.set(s.key, s.status);
     }
   }
   for (const id of [...greenAt.keys()]) if (!by.has(id)) greenAt.delete(id);
@@ -335,7 +342,7 @@ function applyOrder(sessions) {
       const d = rank(a.status) - rank(b.status);
       if (d !== 0) return d;
       if (rank(a.status) !== 2) return 0;
-      return (greenAt.get(b.session_id) ?? 0) - (greenAt.get(a.session_id) ?? 0);
+      return (greenAt.get(b.key) ?? 0) - (greenAt.get(a.key) ?? 0);
     });
 }
 
@@ -369,16 +376,19 @@ function measure() {
 addEventListener("resize", measure);
 
 async function tick() {
-  let sessions = MOCK;
-  if (!sessions) {
-    try { sessions = (await (await fetch("/api/live")).json()).sessions; } catch { sessions = null; }
+  // 拉 groups(一个窗口一个格子)而不是原始会话列表:后者会把 CC 预热的空壳、
+  // fork 出的守护进程各画一个格子,同一个窗口冒出三个块(2026-08-23 用户实报)
+  let groups = MOCK;
+  if (!groups) {
+    try { groups = (await (await fetch("/api/live")).json()).groups; } catch { groups = null; }
   }
-  const sig = JSON.stringify(sessions);
-  if (sig !== lastSig) { lastSig = sig; render(sessions); }
+  const sig = JSON.stringify(groups);
+  if (sig !== lastSig) { lastSig = sig; render(groups); }
 }
 
 function render(sessions) {
   const host = $("cells");
+  lastGroups = sessions;
   if (!sessions || !sessions.length) {
     host.classList.remove("two-rows");
     host.innerHTML = `<span class="empty">${sessions ? "没有运行中的会话" : "ClaudeDeck 服务未运行"}</span>`;
@@ -387,14 +397,22 @@ function render(sessions) {
     prevActive = false;
     return;
   }
-  const view = applyOrder(sessions);   // 分组重排:红→黄→绿,绿组按完成时刻倒序
-  host.innerHTML = view.map((s) => {
-    const st = ["busy", "waiting", "idle"].includes(s.status) ? s.status : "idle";
-    const label = s.tag || s.name || (s.session_id || "?").slice(0, 8);
-    const cls = `cell${s.kind === "bg" ? " bg" : ""}${st === "waiting" ? " waiting" : ""}`;
-    return `<span class="${cls}" data-sid="${esc(s.session_id)}" data-bg="${s.kind === "bg" ? 1 : 0}"
-      data-label="${esc(label)}" data-tag="${esc(s.tag || "")}" title="${esc(s.cwd || "")}">
-      <span class="dot ${st}"></span>${esc(label)}</span>`;
+  const view = applyOrder(sessions);   // 分组重排(红→黄→绿,组内稳定)
+  host.innerHTML = view.map((g) => {
+    const st = ["busy", "waiting", "idle"].includes(g.status) ? g.status : "idle";
+    // label 已由后端截断;完整名与成员清单进悬停提示(CC 给 fork 会话的名字
+    // 直接是用户输入的整句 prompt,不截断会撑爆顶栏并带偏色带几何)
+    const tip = [g.full_label, ...(g.members || []).map(
+      (m) => `　· ${(m.session_id || "").slice(0, 8)} ${m.kind === "bg" ? "[后台]" : ""} ${m.status}`
+    )].join("\n");
+    const cls = `cell${g.has_window ? "" : " bg"}${st === "waiting" ? " waiting" : ""}`;
+    // sid 用于激活窗口(找父),rename-sid 用于重命名(落到叉子后面那截所属的会话)
+    // —— 两者在 fork 组里不是同一个,混用会把父会话的 tag 整个替换掉
+    return `<span class="${cls}" data-key="${esc(g.key)}" data-sid="${esc(g.focus_session_id)}"
+      data-rename-sid="${esc(g.rename_session_id)}" data-tag="${esc(g.rename_hint || "")}"
+      data-window="${g.has_window ? 1 : 0}" data-job="${esc(g.attach_job_id || "")}"
+      data-label="${esc(g.label)}" title="${esc(tip)}">
+      <span class="dot ${st}"></span>${esc(g.label)}</span>`;
   }).join("");
 
   // 换行判定:单行放不下 → 两行网格(按列填充),原生窗口同步倍高
@@ -405,16 +423,17 @@ function render(sessions) {
   window.pywebview?.api?.set_rows?.(S.rows);
 
   // shader 状态:计数给 shader 判活,几何交给 measure()(见其注释,必须能重复调用)
-  const n = sessions.length;
-  S.total = n;
-  S.nRed = sessions.filter((s) => s.status === "waiting").length;
-  S.nYel = sessions.filter((s) => s.status === "busy").length;
+  const nRed = sessions.filter((s) => s.status === "waiting").length;
+  const nYel = sessions.filter((s) => s.status === "busy").length;
+  S.total = sessions.length;
+  S.nRed = nRed;
+  S.nYel = nYel;
   measure();
   // 红带首现:整条红脉冲
-  if (prevRedCount === 0 && S.nRed > 0) S.redPulseAt = performance.now() / 1000;
-  prevRedCount = S.nRed;
+  if (prevRedCount === 0 && nRed > 0) S.redPulseAt = performance.now() / 1000;
+  prevRedCount = nRed;
 
-  const active = S.nRed + S.nYel > 0;
+  const active = nRed + nYel > 0;
   if (prevActive && !active) {
     // 全绿转场:拍下红+黄总带快照(边界即位置,直接取),常规带即刻交给收卷
     S.sweepRed = S.dispRedEnd;
@@ -434,19 +453,78 @@ window.addEventListener("pywebviewready", () => { lastSig = ""; tick(); });
 const post = (url) => fetch(url, { method: "POST",
   headers: { "Content-Type": "application/json" }, body: "{}" });
 
+// 点击 = 「带我过去」:有窗口就激活窗口,没窗口的游离作业开新终端 attach 接管。
+// 旧实现按 kind=="bg" 一律不可点,但 fork 出的会话正是 bg 却有真实窗口。
 document.addEventListener("click", (e) => {
   const cell = e.target.closest(".cell");
-  if (cell && cell.dataset.bg !== "1") post(`/api/live/${cell.dataset.sid}/focus`);
+  if (!cell) return;
+  if (cell.dataset.window === "1") post(`/api/live/${cell.dataset.sid}/focus`);
+  else if (cell.dataset.job) post(`/api/jobs/${cell.dataset.job}/attach`);
 });
 $("brand").addEventListener("click", () => window.pywebview?.api?.open_deck());
+
+/* 悬停展开会话树。
+   只对多成员的组(即 fork 组)展开:绝大多数格子只有一个成员,弹一行的树没意义,
+   而顶栏贴在屏幕最上沿、鼠标经过是常事,见谁弹谁会很烦。
+   500ms 才展开(避免鼠标划过时误触),移出 250ms 才收(留出移到树窗口的时间,
+   树那边进入时会通过 tree_hover 取消收起)。 */
+const HOVER_IN_MS = 500, HOVER_OUT_MS = 250;
+let hoverTimer = null, leaveTimer = null, treeKey = null;
+
+/* Python 侧的看门狗按鼠标坐标收起树时回调这里清状态。
+   否则前端仍以为「这棵树还开着」,再次悬停同一个格子会被判重跳过,
+   表现为移开再移回就不弹了(实测)。 */
+function clearTreeKey() { treeKey = null; }
+
+function treePayload(g) {
+  return {
+    root_sid: g.members.find((m) => m.kind !== "bg")?.session_id
+      || g.members[0]?.session_id,
+    members: g.members.map((m) => ({
+      session_id: m.session_id,
+      job_id: m.job_id || "",
+      kind: m.kind,
+      status: m.status,
+      cwd: m.cwd || "",
+      label: m.tag || m.title || m.name || (m.session_id || "").slice(0, 8),
+      // 有窗口的成员点了是跳转;纯后台作业点了是 attach 接管
+      attachable_window: g.has_window,
+    })),
+  };
+}
+
+$("cells").addEventListener("mouseover", (e) => {
+  const cell = e.target.closest(".cell");
+  if (!cell) return;
+  const g = (lastGroups || []).find((x) => x.key === cell.dataset.key);
+  if (!g || (g.members || []).length < 2) return;   // 单成员不弹
+  clearTimeout(leaveTimer);
+  if (treeKey === g.key) return;                    // 已经展开的同一个,不重复弹
+  clearTimeout(hoverTimer);
+  hoverTimer = setTimeout(() => {
+    treeKey = g.key;
+    const r = cell.getBoundingClientRect();
+    window.pywebview?.api?.tree(treePayload(g), r.left, g.members.length);
+  }, HOVER_IN_MS);
+});
+
+$("cells").addEventListener("mouseout", (e) => {
+  if (e.relatedTarget && e.relatedTarget.closest?.(".cell")) return;  // 格子间移动
+  clearTimeout(hoverTimer);
+  clearTimeout(leaveTimer);
+  leaveTimer = setTimeout(() => {
+    treeKey = null;
+    window.pywebview?.api?.hide_tree();
+  }, HOVER_OUT_MS);
+});
 
 /* 右键菜单:独立小弹窗窗口(主条不加高) */
 document.addEventListener("contextmenu", (e) => {
   e.preventDefault();
   const cell = e.target.closest(".cell");
   window.pywebview?.api?.menu(
-    cell ? cell.dataset.sid : null,
-    cell ? cell.dataset.label : null,
+    cell ? cell.dataset.renameSid : null,   // 重命名目标,不是激活窗口用的那个
+    cell ? cell.dataset.tag || cell.dataset.label : null,
     cell ? cell.dataset.tag : null,
     e.clientX
   );

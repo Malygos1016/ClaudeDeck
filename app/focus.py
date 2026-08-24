@@ -14,11 +14,19 @@ import re
 _GLYPH_RE = re.compile(r"^[^0-9A-Za-z一-鿿]+")
 _ELLIPSIS = ("…", "...")
 
+# 管理员权限运行的终端会在标签标题前加一截前缀,且随系统语言变化
+# (2026-08-23 本机同时抓到英文 'Administrator: ' 与中文 '管理员: ')。
+# 只认这份白名单,不能泛化成「剥掉第一个冒号之前」—— 那会误伤
+# 「TODO: 修好色带」这类本身就带冒号的正常标题。其他语言按需补进来。
+_ADMIN_PREFIX_RE = re.compile(r"^\s*(?:Administrator|管理员|管理員|管理者)\s*[:：]\s*", re.I)
+
 WT_CLASS = "CASCADIA_HOSTING_WINDOW_CLASS"
 
 
 def strip_glyph(tab_text: str) -> str:
-    return _GLYPH_RE.sub("", tab_text or "").strip()
+    """剥掉标签文本的装饰:先去管理员前缀,再去开头的状态符号(✳/◑/⏺ 等)。"""
+    t = _ADMIN_PREFIX_RE.sub("", tab_text or "")
+    return _GLYPH_RE.sub("", t).strip()
 
 
 def match_tab(tab_text: str, candidates: list[str]) -> bool:

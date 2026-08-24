@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>CCTopBarTree</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; user-select: none; }
+  html, body { height: 100%; overflow: hidden; }
+  body {
+    background: #10151d; padding: 6px;
+    font-family: "Microsoft YaHei UI", "Segoe UI", sans-serif;
+    border: 1px solid rgba(160, 180, 210, 0.2);
+  }
+  .row {
+    display: flex; align-items: center; gap: 7px;
+    font-size: 12.5px; color: #c9d2df; padding: 6px 9px; border-radius: 6px;
+    cursor: pointer; white-space: nowrap;
+  }
+  .row:hover { background: rgba(226, 161, 60, 0.14); }
+  .row.nowin { cursor: pointer; }
+  .row.nowin .name { color: #9aa4b3; font-style: italic; }
+  /* 缩进出父子关系:fork 出来的挂在父下面一级 */
+  .row.child { padding-left: 20px; }
+  .dot { width: 7px; height: 7px; border-radius: 50%; flex: none; }
+  .dot.busy { background: #e2a13c; box-shadow: 0 0 7px rgba(226, 161, 60, 0.8); }
+  .dot.waiting { background: #d97060; box-shadow: 0 0 7px rgba(217, 112, 96, 0.9); }
+  .dot.idle { background: #58b884; box-shadow: 0 0 5px rgba(88, 184, 132, 0.5); }
+  .name { flex: 1; overflow: hidden; text-overflow: ellipsis; }
+  .fork { color: #e2a13c; flex: none; }
+  .meta { font-size: 11px; color: #6b7686; flex: none; }
+  .act { font-size: 11px; color: #6b7686; flex: none; }
+  .row:hover .act { color: #e2a13c; }
+</style>
+</head>
+<body>
+<div id="box"></div>
+<script>
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]));
+const box = document.getElementById("box");
+const PORT = location.port || 8737;
+let members = [];
+
+function hide() { window.pywebview?.api?.hide_tree(); }
+
+/* 由 Python 在悬停时注入调用。payload = {members:[...], root_sid} */
+function showTree(payload) {
+  members = (payload && payload.members) || [];
+  const rootSid = payload && payload.root_sid;
+  // action 由后端算好:focus=激活窗口 / resume=另开窗口 / attach=接管后台作业。
+  // fork 的父节点是 resume —— 它的窗口已经被子分支占用,在那儿回不去了。
+  const ACT_TEXT = { focus: "跳转", resume: "恢复", attach: "接管" };
+  box.innerHTML = members.map((m) => {
+    const st = ["busy", "waiting", "idle"].includes(m.status) ? m.status : "idle";
+    const isChild = m.session_id !== rootSid;
+    const action = ACT_TEXT[m.action] ? m.action : "focus";
+    return `<div class="row ${isChild ? "child" : ""} ${action === "focus" ? "" : "nowin"}"
+        data-sid="${esc(m.session_id)}" data-job="${esc(m.job_id || "")}"
+        data-action="${esc(action)}" title="${esc(m.cwd || "")}">
+      ${isChild ? '<span class="fork">⑂</span>' : ""}
+      <span class="dot ${st}"></span>
+      <span class="name">${esc(m.label)}</span>
+      <span class="meta">${esc(m.kind === "bg" ? "后台" : "终端")}</span>
+      <span class="act">${ACT_TEXT[action]}</span>
+    </div>`;
+  }).join("");
+}
+
+box.addEventListener("click", async (e) => {
+  const row = e.target.closest(".row");
+  if (!row) return;
+  const base = `http://127.0.0.1:${PORT}/api`;
+  const { action, sid, job } = row.dataset;
+  const url = action === "attach" && job ? `${base}/jobs/${job}/attach`
+    : action === "resume" ? `${base}/sessions/${sid}/resume`
+    : `${base}/live/${sid}/focus`;
+  try {
+    await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+  } finally { hide(); }
+});
+
+/* 收起与否由 Python 侧按鼠标实际坐标判断(见 _tree_should_stay):
+   顶栏与树是两个独立窗口,mouseenter/mouseleave 在它们之间移动时不可靠。 */
+document.addEventListener("keydown", (e) => { if (e.key === "Escape") hide(); });
+document.addEventListener("contextmenu", (e) => e.preventDefault());
+</script>
+</body>
+</html>
