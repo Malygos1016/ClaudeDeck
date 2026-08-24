@@ -48,6 +48,28 @@ def _fork_suffix(name: str) -> str:
     return name.strip()
 
 
+def _dedup_by_session(sessions: list[dict]) -> list[dict]:
+    """同一个会话只留一条,取最近活跃的那个实例。
+
+    一个会话可以同时开着多个窗口 —— 点 fork 父节点 resume 之后就是两个
+    (原窗口那个 + 新恢复的),这个状态是常态不是偶发。不去重的话树里会出现
+    两条同名的父(用户实报:悬停时树上有三条)。
+    """
+    best: dict[str, dict] = {}
+    for s in sessions:
+        sid = s.get("session_id")
+        prev = best.get(sid)
+        if prev is None or _freshness(s) < _freshness(prev):
+            best[sid] = s          # dict 替换值不改变插入顺序,原有次序得以保留
+    return list(best.values())
+
+
+def _freshness(s: dict) -> float:
+    """距上次状态更新的秒数,越小越新。缺数据的排在有数据的后面。"""
+    v = s.get("status_seconds")
+    return float(v) if isinstance(v, (int, float)) else float("inf")
+
+
 def _job_index(jobs: Iterable[dict]) -> dict[str, dict]:
     return {j["session_id"]: j for j in jobs if j.get("session_id")}
 
@@ -86,6 +108,7 @@ def build_groups(sessions: list[dict], jobs: list[dict]) -> list[dict]:
         s for s in sessions
         if not s.get("spare") and s.get("entrypoint", "cli") != "sdk-cli"
     ]
+    live = _dedup_by_session(live)
     by_sid = {s.get("session_id"): s for s in live}
 
     # 2. 认领:fork 子挂到父所在的组;父不在场时(已退出)自己独立成组

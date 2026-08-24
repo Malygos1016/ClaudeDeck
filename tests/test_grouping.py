@@ -59,6 +59,7 @@ def sess(sid: str, **over) -> dict:
         "tag": None,
         "spare": False,
         "alive": True,
+        "status_seconds": 1.0,
         # 进程链上有没有终端祖先。kind 不能当窗口判据(见对应测试)
         "has_terminal": True,
     }
@@ -157,6 +158,41 @@ def test_orphan_bg_with_job_can_attach():
     g = build_groups([sess("lonely", kind="bg", has_terminal=False)], jobs=jobs)[0]
     assert g["has_window"] is False
     assert g["attach_job_id"] == "job123"
+
+
+# ---------- 同一会话多实例 ----------
+
+def test_same_session_two_instances_collapse_to_one():
+    """一个会话可能同时开着两个窗口,树里只该出现一条。
+
+    用户实报:悬停时树上有三条 —— 两个同名的父 + 一个子。因为点 fork 父节点
+    resume 之后,父会话就有了两个实例(原窗口那个 + 新恢复的),而分组是逐条收集
+    成员的。这个状态会常态化,不是偶发。
+    """
+    old = sess("p", pid=1, status_seconds=21008)
+    new = sess("p", pid=2, status_seconds=186)
+    groups = build_groups([old, new], jobs=[])
+    assert len(groups) == 1
+    assert len(groups[0]["members"]) == 1
+    assert groups[0]["members"][0]["pid"] == 2   # 留最近活跃的那个窗口
+
+
+def test_dedup_keeps_the_one_with_known_freshness():
+    """有的条目没有 status_seconds(从未上报过状态),不能让它盖掉有数据的。"""
+    unknown = sess("p", pid=1, status_seconds=None)
+    fresh = sess("p", pid=2, status_seconds=10)
+    g = build_groups([unknown, fresh], jobs=[])[0]
+    assert g["members"][0]["pid"] == 2
+
+
+def test_fork_group_with_duplicated_parent_still_has_two_rows():
+    """回归用户实报的那一幕:两个父实例 + 一个 fork 子 → 树里应是两行。"""
+    p_old = sess("p", pid=1, status_seconds=21008, tag="ClaudeDeck開發")
+    p_new = sess("p", pid=2, status_seconds=186, tag="ClaudeDeck開發")
+    child = sess("c", kind="bg", has_terminal=False, tag="AA")
+    jobs = [{"session_id": "c", "fork_parent_session_id": "p"}]
+    g = build_groups([p_old, p_new, child], jobs=jobs)[0]
+    assert [m["session_id"] for m in g["members"]] == ["p", "c"]
 
 
 # ---------- 每个成员点下去做什么 ----------
