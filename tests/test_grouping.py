@@ -185,6 +185,38 @@ def test_fork_group_label_is_parent_tag_plus_fork_suffix():
     assert len(g["label"]) < len(g["full_label"])
 
 
+def test_rename_target_is_the_fork_child_not_the_parent():
+    """在 fork 格子上重命名,改的必须是叉子后面那截 —— 即落到子会话身上。
+
+    用户实报:打了「hi」结果把前面的「ClaudeDeck開發」整个替换掉了。
+    原因是格子的 sid 用了 focus_session_id(父会话,拿来激活窗口的),
+    重命名顺着它把 tag 打到了父身上。前半截是父的 tag,属于引用,
+    要改得去父会话改,不能在 fork 会话里动。
+    """
+    parent = sess("p", tag="ClaudeDeck開發")
+    child = sess("c", kind="bg", name="X ⑂ 我現在fork了")
+    jobs = [{"session_id": "c", "fork_parent_session_id": "p"}]
+    g = build_groups([parent, child], jobs=jobs)[0]
+    assert g["focus_session_id"] == "p"      # 激活窗口找父
+    assert g["rename_session_id"] == "c"     # 重命名落到子
+    assert g["rename_hint"] == "我現在fork了"  # 编辑框里应带出的现值
+
+
+def test_rename_target_is_self_when_not_forked():
+    g = build_groups([sess("a", tag="AALab")], jobs=[])[0]
+    assert g["rename_session_id"] == "a"
+    assert g["rename_hint"] == "AALab"
+
+
+def test_renaming_fork_child_only_changes_the_suffix():
+    """给子会话打了 tag 之后,前半截仍取自父,只有叉子后面变成新名字。"""
+    parent = sess("p", tag="ClaudeDeck開發")
+    child = sess("c", kind="bg", tag="hi", name="X ⑂ 我現在fork了")
+    jobs = [{"session_id": "c", "fork_parent_session_id": "p"}]
+    g = build_groups([parent, child], jobs=jobs)[0]
+    assert g["full_label"] == "ClaudeDeck開發 ⑂ hi"
+
+
 def test_plain_group_label_has_no_fork_marker():
     g = build_groups([sess("a", tag="AALab")], jobs=[])[0]
     assert g["label"] == "AALab"
