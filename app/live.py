@@ -47,6 +47,48 @@ def _probe_process(pid: Any, proc_start: Any) -> tuple[bool, bool | None, str]:
     return True, False, "pid-reused"
 
 
+# 终端宿主进程名。会话进程往上追到其中之一,才算真的有窗口可跳。
+TERMINAL_HOSTS = {
+    "windowsterminal.exe",
+    "conhost.exe",
+    "cmd.exe",
+    "powershell.exe",
+    "pwsh.exe",
+    "alacritty.exe",
+    "wezterm-gui.exe",
+}
+_ANCESTRY_MAX_DEPTH = 8
+
+
+def has_terminal_ancestor(pid: Any) -> bool:
+    """会话进程的祖先里有没有终端宿主。
+
+    判断「有没有窗口」只能靠这个,不能靠 kind:kind=interactive 仅表示不是
+    --bg 起的。EdgeTracer 用 `claude -p` 派生的会话同样是 interactive,
+    却挂在 python.exe 下、压根没有终端(2026-08-23 用户实报的误判)。
+    进程链是系统级事实,也不像窗口标题那样会被改写。
+    """
+    if not isinstance(pid, int):
+        return False
+    try:
+        proc = psutil.Process(pid)
+    except (psutil.NoSuchProcess, psutil.AccessDenied):
+        return False
+    for _ in range(_ANCESTRY_MAX_DEPTH):
+        try:
+            proc = proc.parent()
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            return False
+        if proc is None:
+            return False
+        try:
+            if proc.name().lower() in TERMINAL_HOSTS:
+                return True
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            return False
+    return False
+
+
 def read_live_sessions(cfg: Config, *, include_stale: bool = False) -> dict:
     sess_dir = cfg.claude_home_path / "sessions"
     entries: list[dict] = []
@@ -88,6 +130,10 @@ def read_live_sessions(cfg: Config, *, include_stale: bool = False) -> dict:
                 "name_source": d.get("nameSource"),
                 "cwd": d.get("cwd"),
                 "kind": d.get("kind"),
+                # cli=用户从终端开的;sdk-cli=脚本/SDK 派生的一次性会话
+                "entrypoint": d.get("entrypoint"),
+                # 有没有窗口以进程链为准,不是 kind(见 has_terminal_ancestor)
+                "has_terminal": has_terminal_ancestor(d.get("pid")) if alive else False,
                 # CC 预热的备用空壳:无对话内容,不该出现在任何界面上(2026-08-23 实测)
                 "spare": bool(d.get("spare")),
                 "job_id": d.get("jobId"),

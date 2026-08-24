@@ -77,8 +77,15 @@ def build_groups(sessions: list[dict], jobs: list[dict]) -> list[dict]:
     """
     by_job = _job_index(jobs)
 
-    # 1. 丢掉空壳:它没有对话内容,点了也没有意义
-    live = [s for s in sessions if not s.get("spare")]
+    # 1. 丢掉不该占格子的:
+    #    - spare 空壳:CC 预热的备用进程,没有对话内容,点了也没有意义
+    #    - 脚本/SDK 派生的一次性会话(entrypoint=sdk-cli):用户没主动开、没有窗口
+    #      可跳、跑完即退。实例是 EdgeTracer 每处理一条收藏派生一个 `claude -p`,
+    #      显示出来只会不断闪现新格子(用户拍板不显示)。
+    live = [
+        s for s in sessions
+        if not s.get("spare") and s.get("entrypoint", "cli") != "sdk-cli"
+    ]
     by_sid = {s.get("session_id"): s for s in live}
 
     # 2. 认领:fork 子挂到父所在的组;父不在场时(已退出)自己独立成组
@@ -108,11 +115,10 @@ def build_groups(sessions: list[dict], jobs: list[dict]) -> list[dict]:
         # 树里父在上、子缩进在下。入参沿用活跃会话的排序(忙的在前),
         # fork 子多半是 busy,不重排就会画成父子颠倒。
         members.sort(key=lambda m: 0 if m.get("session_id") == root_sid else 1)
-        # 持有窗口的是 interactive 的那个;fork 出的守护进程没有自己的窗口
-        window_owner = next(
-            (m for m in members if m.get("kind") != "bg"),
-            None,
-        )
+        # 持有窗口的判据是「进程链上有终端祖先」,不是 kind。
+        # kind=interactive 只说明不是 --bg 起的:EdgeTracer 的脚本会话也是
+        # interactive,却挂在 python.exe 下、根本没有终端(用户实报的误判)。
+        window_owner = next((m for m in members if m.get("has_terminal")), None)
         has_window = window_owner is not None
 
         statuses = [_member_status(m, by_job.get(m.get("session_id"))) for m in members]

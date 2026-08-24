@@ -52,12 +52,15 @@ def sess(sid: str, **over) -> dict:
         "session_id": sid,
         "pid": 1000,
         "kind": "interactive",
+        "entrypoint": "cli",
         "status": "idle",
         "name": "w-1000",
         "title": None,
         "tag": None,
         "spare": False,
         "alive": True,
+        # 进程链上有没有终端祖先。kind 不能当窗口判据(见对应测试)
+        "has_terminal": True,
     }
     d.update(over)
     return d
@@ -75,6 +78,49 @@ def test_spare_session_is_dropped():
 def test_spare_only_yields_no_groups():
     groups = build_groups([sess("s", spare=True)], jobs=[])
     assert groups == []
+
+
+# ---------- 脚本派生的一次性会话 ----------
+
+def test_sdk_cli_session_is_dropped():
+    """脚本/SDK 调起的一次性会话不进顶栏(用户拍板)。
+
+    实例:EdgeTracer(QQ 收藏箱机器人)每处理一条收藏就派生一个
+    `claude -p ... --output-format json`,entrypoint=sdk-cli、父进程是 python、
+    连 status 字段都没有。用户没主动开它,也没有窗口可跳,显示出来只会不断闪现
+    新格子;它本身通过 QQ 回执,不需要顶栏再提醒一遍。
+    """
+    groups = build_groups(
+        [sess("a"), sess("bot", entrypoint="sdk-cli", status=None)], jobs=[]
+    )
+    ids = [m["session_id"] for g in groups for m in g["members"]]
+    assert ids == ["a"]
+
+
+def test_normal_cli_entrypoint_is_kept():
+    groups = build_groups([sess("a", entrypoint="cli")], jobs=[])
+    assert [g["key"] for g in groups] == ["a"]
+
+
+def test_kind_interactive_alone_does_not_mean_it_has_a_window():
+    """kind=interactive 只说明「不是 --bg 起的」,不等于有终端窗口。
+
+    第一版拿 kind 当窗口判据,于是把 EdgeTracer 的脚本会话判成了有窗口,
+    顶栏给它画了格子、点击必然失败(用户实报)。窗口归属以进程链为准。
+    """
+    g = build_groups(
+        [sess("x", kind="interactive", has_terminal=False, entrypoint="cli")], jobs=[]
+    )[0]
+    assert g["has_window"] is False
+
+
+def test_terminal_ancestry_decides_window_owner():
+    parent = sess("p", kind="interactive", has_terminal=True)
+    child = sess("c", kind="bg", has_terminal=False)
+    jobs = [{"session_id": "c", "fork_parent_session_id": "p"}]
+    g = build_groups([parent, child], jobs=jobs)[0]
+    assert g["has_window"] is True
+    assert g["focus_session_id"] == "p"
 
 
 # ---------- fork 父子合并 ----------
@@ -101,14 +147,14 @@ def test_fork_group_focuses_the_window_owner():
 
 def test_orphan_bg_group_has_no_window():
     """没有 fork 父的守护进程是真正的游离作业,没有窗口可跳。"""
-    g = build_groups([sess("lonely", kind="bg")], jobs=[])[0]
+    g = build_groups([sess("lonely", kind="bg", has_terminal=False)], jobs=[])[0]
     assert g["has_window"] is False
     assert g["attach_job_id"] is None  # 没有 job 记录时无从 attach
 
 
 def test_orphan_bg_with_job_can_attach():
     jobs = [{"session_id": "lonely", "job_id": "job123", "fork_parent_session_id": None}]
-    g = build_groups([sess("lonely", kind="bg")], jobs=jobs)[0]
+    g = build_groups([sess("lonely", kind="bg", has_terminal=False)], jobs=jobs)[0]
     assert g["has_window"] is False
     assert g["attach_job_id"] == "job123"
 
