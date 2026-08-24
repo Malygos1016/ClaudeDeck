@@ -75,9 +75,8 @@ box.addEventListener("click", async (e) => {
   } finally { hide(); }
 });
 
-/* 鼠标在树上时不收:顶栏那边移出后有 250ms 宽限,进入这里即取消收起 */
-document.addEventListener("mouseenter", () => window.pywebview?.api?.tree_hover(true));
-document.addEventListener("mouseleave", () => window.pywebview?.api?.tree_hover(false));
+/* 收起与否由 Python 侧按鼠标实际坐标判断(见 _tree_should_stay):
+   顶栏与树是两个独立窗口,mouseenter/mouseleave 在它们之间移动时不可靠。 */
 document.addEventListener("keydown", (e) => { if (e.key === "Escape") hide(); });
 document.addEventListener("contextmenu", (e) => e.preventDefault());
 </script>

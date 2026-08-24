@@ -471,6 +471,11 @@ $("brand").addEventListener("click", () => window.pywebview?.api?.open_deck());
 const HOVER_IN_MS = 500, HOVER_OUT_MS = 250;
 let hoverTimer = null, leaveTimer = null, treeKey = null;
 
+/* Python 侧的看门狗按鼠标坐标收起树时回调这里清状态。
+   否则前端仍以为「这棵树还开着」,再次悬停同一个格子会被判重跳过,
+   表现为移开再移回就不弹了(实测)。 */
+function clearTreeKey() { treeKey = null; }
+
 function treePayload(g) {
   return {
     root_sid: g.members.find((m) => m.kind !== "bg")?.session_id
