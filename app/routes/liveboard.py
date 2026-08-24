@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import sqlite3
+import subprocess
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
@@ -113,6 +114,32 @@ def attach_job(job_id: str, request: Request):
     if job is None:
         raise HTTPException(404, "没有这个后台作业。")
     return launch_attach(cfg, job.get("cwd"), job_id)
+
+
+@router.post("/jobs/{job_id}/stop")
+def stop_job(job_id: str, request: Request):
+    """停止一个后台作业(官方 `claude stop`)。
+
+    attach 只是观看,关掉观看窗口守护进程照常活着(实测,by design)——
+    要让它真正退场只有 stop。transcript 完好保留,之后随时可正常 resume。
+    job_id 必须在当前作业列表里,顺带杜绝任意参数拼进命令行。
+    """
+    cfg = request.app.state.cfg
+    job = next(
+        (j for j in read_jobs(cfg)["jobs"] if j.get("job_id") == job_id),
+        None,
+    )
+    if job is None:
+        raise HTTPException(404, "没有这个后台作业。")
+    proc = subprocess.run(
+        [cfg.claude_exe, "stop", job_id],
+        capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30,
+    )
+    if proc.returncode != 0:
+        raise HTTPException(
+            500, f"claude stop 退出码 {proc.returncode}: {(proc.stderr or proc.stdout)[:500]}"
+        )
+    return {"ok": True, "stopped": job_id, "stdout": (proc.stdout or "").strip()[:200]}
 
 
 @router.get("/quota")
