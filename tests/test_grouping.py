@@ -159,6 +159,42 @@ def test_orphan_bg_with_job_can_attach():
     assert g["attach_job_id"] == "job123"
 
 
+# ---------- 每个成员点下去做什么 ----------
+
+def test_fork_parent_action_is_resume():
+    """点 fork 的父节点要 resume 开新窗口,不是激活窗口。
+
+    fork 是在父会话的窗口里就地发生的,那个窗口现在跑的是子分支,父分支在里面
+    回不去了。而 fork 的意义正是一个上下文分支成两条各自推进(用户原话),
+    父分支必须能单独拉起来,否则 fork 就废了一半。
+    """
+    parent = sess("p", tag="父", has_terminal=True)
+    child = sess("c", kind="bg", has_terminal=False)
+    jobs = [{"session_id": "c", "fork_parent_session_id": "p"}]
+    g = build_groups([parent, child], jobs=jobs)[0]
+    acts = {m["session_id"]: m["action"] for m in g["members"]}
+    assert acts["p"] == "resume"   # 父:窗口已被子占,只能另开
+    assert acts["c"] == "focus"    # 子:窗口里跑的就是它,跳过去即可
+
+
+def test_plain_session_action_is_focus():
+    """没 fork 过的普通会话,窗口就是它自己的,点了跳过去,不该另开一个。"""
+    g = build_groups([sess("a", has_terminal=True)], jobs=[])[0]
+    assert g["members"][0]["action"] == "focus"
+
+
+def test_orphan_bg_action_is_attach():
+    jobs = [{"session_id": "lonely", "job_id": "j1", "fork_parent_session_id": None}]
+    g = build_groups([sess("lonely", kind="bg", has_terminal=False)], jobs=jobs)[0]
+    assert g["members"][0]["action"] == "attach"
+
+
+def test_bg_without_job_falls_back_to_resume():
+    """没有 job 记录就无从 attach,只能按会话 resume。"""
+    g = build_groups([sess("x", kind="bg", has_terminal=False)], jobs=[])[0]
+    assert g["members"][0]["action"] == "resume"
+
+
 # ---------- 状态冒泡 ----------
 
 def test_status_bubbles_to_most_urgent():

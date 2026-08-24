@@ -46,20 +46,21 @@ function hide() { window.pywebview?.api?.hide_tree(); }
 function showTree(payload) {
   members = (payload && payload.members) || [];
   const rootSid = payload && payload.root_sid;
-  box.innerHTML = members.map((m, i) => {
+  // action 由后端算好:focus=激活窗口 / resume=另开窗口 / attach=接管后台作业。
+  // fork 的父节点是 resume —— 它的窗口已经被子分支占用,在那儿回不去了。
+  const ACT_TEXT = { focus: "跳转", resume: "恢复", attach: "接管" };
+  box.innerHTML = members.map((m) => {
     const st = ["busy", "waiting", "idle"].includes(m.status) ? m.status : "idle";
     const isChild = m.session_id !== rootSid;
-    const noWin = m.kind === "bg" && !m.attachable_window;
-    // 无窗口的作业点击是「接管」(claude attach),有窗口的是「跳过去」
-    const act = noWin ? "接管" : "跳转";
-    return `<div class="row ${isChild ? "child" : ""} ${noWin ? "nowin" : ""}"
+    const action = ACT_TEXT[m.action] ? m.action : "focus";
+    return `<div class="row ${isChild ? "child" : ""} ${action === "focus" ? "" : "nowin"}"
         data-sid="${esc(m.session_id)}" data-job="${esc(m.job_id || "")}"
-        data-nowin="${noWin ? 1 : 0}" title="${esc(m.cwd || "")}">
+        data-action="${esc(action)}" title="${esc(m.cwd || "")}">
       ${isChild ? '<span class="fork">⑂</span>' : ""}
       <span class="dot ${st}"></span>
       <span class="name">${esc(m.label)}</span>
       <span class="meta">${esc(m.kind === "bg" ? "后台" : "终端")}</span>
-      <span class="act">${act}</span>
+      <span class="act">${ACT_TEXT[action]}</span>
     </div>`;
   }).join("");
 }
@@ -67,9 +68,11 @@ function showTree(payload) {
 box.addEventListener("click", async (e) => {
   const row = e.target.closest(".row");
   if (!row) return;
-  const url = row.dataset.nowin === "1" && row.dataset.job
-    ? `http://127.0.0.1:${PORT}/api/jobs/${row.dataset.job}/attach`
-    : `http://127.0.0.1:${PORT}/api/live/${row.dataset.sid}/focus`;
+  const base = `http://127.0.0.1:${PORT}/api`;
+  const { action, sid, job } = row.dataset;
+  const url = action === "attach" && job ? `${base}/jobs/${job}/attach`
+    : action === "resume" ? `${base}/sessions/${sid}/resume`
+    : `${base}/live/${sid}/focus`;
   try {
     await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
   } finally { hide(); }

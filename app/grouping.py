@@ -128,6 +128,10 @@ def build_groups(sessions: list[dict], jobs: list[dict]) -> list[dict]:
         # 否则是自己。前半截是父的 tag,属于引用,不能在 fork 会话里改动。
         forked = _forked_members(root, members, by_job)
         rename_target = forked[-1] if forked else root
+
+        for m in members:
+            m["action"] = _member_action(m, root_sid, bool(forked), has_window, by_job)
+
         full_label = _group_label(root, members, by_job)
         attach_job_id = None
         if not has_window:
@@ -151,6 +155,30 @@ def build_groups(sessions: list[dict], jobs: list[dict]) -> list[dict]:
 
     groups.sort(key=lambda g: (_rank(g["status"]), g["label"]))
     return groups
+
+
+def _member_action(
+    m: dict, root_sid: str, has_fork_child: bool, has_window: bool, by_job: dict[str, dict]
+) -> str:
+    """这一条点下去该做什么:focus(激活窗口) / resume(另开窗口) / attach(接管作业)。
+
+    fork 的父节点必须是 resume:fork 在父会话的窗口里就地发生,那个窗口现在跑的是
+    子分支,父分支在里面回不去了。而 fork 的意义正是一个上下文分支成两条各自推进,
+    父分支得能单独拉起来。
+
+    fork 的子节点仍是 focus —— 它自己是守护进程、没有终端祖先,但组里那个窗口
+    显示的正是它,所以判据要看「组有没有窗口」,不能只看成员自己。
+    """
+    sid = m.get("session_id")
+    if sid == root_sid and has_fork_child:
+        return "resume"
+    if m.get("has_terminal"):
+        return "focus"
+    if sid != root_sid and has_window:
+        return "focus"
+    if (by_job.get(sid) or {}).get("job_id"):
+        return "attach"
+    return "resume"
 
 
 def _forked_members(root: dict, members: list[dict], by_job: dict[str, dict]) -> list[dict]:

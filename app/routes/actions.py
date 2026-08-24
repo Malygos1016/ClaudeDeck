@@ -12,10 +12,29 @@ from fastapi import APIRouter, Body, Depends, HTTPException, Request
 from .. import archive as archive_mod
 from .. import stats as stats_mod
 from ..launcher import CwdMissing, launch_resume
-from ..live import read_live_sessions
+from ..live import read_jobs, read_live_sessions
 from . import request_db
 
 router = APIRouter(prefix="/api")
+
+
+def _has_running_fork_child(cfg, sid: str) -> bool:
+    """该会话有没有正在运行的 fork 子分支。
+
+    有的话说明它的窗口已经被子分支占用,父分支在那个窗口里回不去,
+    resume 另开一个窗口是唯一出路,不能按「已在窗口里打开」拦掉。
+    """
+    want = (sid or "").lower()
+    live = {
+        (s.get("session_id") or "").lower()
+        for s in read_live_sessions(cfg)["sessions"]
+    }
+    for j in read_jobs(cfg)["jobs"]:
+        parent = (j.get("fork_parent_session_id") or "").lower()
+        child = (j.get("session_id") or "").lower()
+        if parent == want and child in live:
+            return True
+    return False
 
 
 def _srow(con: sqlite3.Connection, sid: str) -> sqlite3.Row:
@@ -39,8 +58,13 @@ def resume_session(
         raise HTTPException(
             409, "源 transcript 已被清理,resume 会找不到会话——先在归档页还原,再恢复。"
         )
-    if provider == "claude":
-        # 已在某个窗口里打开的会话不能再 resume(CC 检测并发后会直接退出,实测)
+    if provider == "claude" and not fork and not _has_running_fork_child(request.app.state.cfg, sid):
+        # 已在某个窗口里打开的会话通常不必再 resume:那个窗口就在,直接用即可。
+        # 例外是 fork 过的父会话 —— fork 在它的窗口里就地发生,窗口现在跑的是
+        # 子分支,父分支在里面回不去了,必须允许另开一个(fork 的意义正是两条
+        # 分支各自推进)。此时放行,判断见 _has_running_fork_child。
+        # 注:旧注释称「CC 并发检测会让新实例直接退出」,2026-08-24 在 CC 2.1.241
+        # 上实测已不复现,两个实例可以共存;此拦截现在只为避免无谓的重复窗口。
         for s in read_live_sessions(request.app.state.cfg)["sessions"]:
             if (s.get("session_id") or "").lower() == sid.lower():
                 raise HTTPException(
