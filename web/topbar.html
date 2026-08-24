@@ -302,6 +302,7 @@ const MOCK = (() => {
 })();
 
 let lastSig = "";
+let lastGroups = null;    // 悬停展开树时按 key 回查成员
 let prevActive = false;   // 上一轮是否存在红/黄(全绿转场的触发边沿)
 let prevRedCount = 0;     // 红带首现的脉冲边沿
 
@@ -387,6 +388,7 @@ async function tick() {
 
 function render(sessions) {
   const host = $("cells");
+  lastGroups = sessions;
   if (!sessions || !sessions.length) {
     host.classList.remove("two-rows");
     host.innerHTML = `<span class="empty">${sessions ? "没有运行中的会话" : "ClaudeDeck 服务未运行"}</span>`;
@@ -406,7 +408,7 @@ function render(sessions) {
     const cls = `cell${g.has_window ? "" : " bg"}${st === "waiting" ? " waiting" : ""}`;
     // sid 用于激活窗口(找父),rename-sid 用于重命名(落到叉子后面那截所属的会话)
     // —— 两者在 fork 组里不是同一个,混用会把父会话的 tag 整个替换掉
-    return `<span class="${cls}" data-sid="${esc(g.focus_session_id)}"
+    return `<span class="${cls}" data-key="${esc(g.key)}" data-sid="${esc(g.focus_session_id)}"
       data-rename-sid="${esc(g.rename_session_id)}" data-tag="${esc(g.rename_hint || "")}"
       data-window="${g.has_window ? 1 : 0}" data-job="${esc(g.attach_job_id || "")}"
       data-label="${esc(g.label)}" title="${esc(tip)}">
@@ -460,6 +462,56 @@ document.addEventListener("click", (e) => {
   else if (cell.dataset.job) post(`/api/jobs/${cell.dataset.job}/attach`);
 });
 $("brand").addEventListener("click", () => window.pywebview?.api?.open_deck());
+
+/* 悬停展开会话树。
+   只对多成员的组(即 fork 组)展开:绝大多数格子只有一个成员,弹一行的树没意义,
+   而顶栏贴在屏幕最上沿、鼠标经过是常事,见谁弹谁会很烦。
+   500ms 才展开(避免鼠标划过时误触),移出 250ms 才收(留出移到树窗口的时间,
+   树那边进入时会通过 tree_hover 取消收起)。 */
+const HOVER_IN_MS = 500, HOVER_OUT_MS = 250;
+let hoverTimer = null, leaveTimer = null, treeKey = null;
+
+function treePayload(g) {
+  return {
+    root_sid: g.members.find((m) => m.kind !== "bg")?.session_id
+      || g.members[0]?.session_id,
+    members: g.members.map((m) => ({
+      session_id: m.session_id,
+      job_id: m.job_id || "",
+      kind: m.kind,
+      status: m.status,
+      cwd: m.cwd || "",
+      label: m.tag || m.title || m.name || (m.session_id || "").slice(0, 8),
+      // 有窗口的成员点了是跳转;纯后台作业点了是 attach 接管
+      attachable_window: g.has_window,
+    })),
+  };
+}
+
+$("cells").addEventListener("mouseover", (e) => {
+  const cell = e.target.closest(".cell");
+  if (!cell) return;
+  const g = (lastGroups || []).find((x) => x.key === cell.dataset.key);
+  if (!g || (g.members || []).length < 2) return;   // 单成员不弹
+  clearTimeout(leaveTimer);
+  if (treeKey === g.key) return;                    // 已经展开的同一个,不重复弹
+  clearTimeout(hoverTimer);
+  hoverTimer = setTimeout(() => {
+    treeKey = g.key;
+    const r = cell.getBoundingClientRect();
+    window.pywebview?.api?.tree(treePayload(g), r.left, g.members.length);
+  }, HOVER_IN_MS);
+});
+
+$("cells").addEventListener("mouseout", (e) => {
+  if (e.relatedTarget && e.relatedTarget.closest?.(".cell")) return;  // 格子间移动
+  clearTimeout(hoverTimer);
+  clearTimeout(leaveTimer);
+  leaveTimer = setTimeout(() => {
+    treeKey = null;
+    window.pywebview?.api?.hide_tree();
+  }, HOVER_OUT_MS);
+});
 
 /* 右键菜单:独立小弹窗窗口(主条不加高) */
 document.addEventListener("contextmenu", (e) => {

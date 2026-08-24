@@ -202,6 +202,17 @@ def test_rename_target_is_the_fork_child_not_the_parent():
     assert g["rename_hint"] == "我現在fork了"  # 编辑框里应带出的现值
 
 
+def test_members_put_root_first_then_forks():
+    """树里父在上、子缩进在下。members 若沿用活跃会话的排序(忙的在前),
+    fork 子是 busy 就会跑到父前面,树画出来父子颠倒。"""
+    parent = sess("p", status="idle", tag="父")
+    child = sess("c", kind="bg", status="busy", tag="子")
+    jobs = [{"session_id": "c", "fork_parent_session_id": "p"}]
+    # 故意按「子在前」传入,模拟 read_live_sessions 的 busy 优先排序
+    g = build_groups([child, parent], jobs=jobs)[0]
+    assert [m["session_id"] for m in g["members"]] == ["p", "c"]
+
+
 def test_rename_target_is_self_when_not_forked():
     g = build_groups([sess("a", tag="AALab")], jobs=[])[0]
     assert g["rename_session_id"] == "a"

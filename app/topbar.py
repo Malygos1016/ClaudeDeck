@@ -144,9 +144,14 @@ def _run_webview(cfg) -> bool:
     # 菜单是独立小窗口:主条永远 32px。此前的"加高+SetWindowRgn 裁剪"方案已废——
     # WebView2 走 DirectComposition,区域裁剪对渲染无效,表现为全宽黑带(用户实报)。
     MENU_W, MENU_H = 300, 152  # 逻辑像素
+    # 会话树同理必须独立成窗;高度按成员数算,宽度固定
+    TREE_W, TREE_ROW_H, TREE_PAD = 420, 30, 14
 
     def _menu_hwnd() -> int:
         return user32.FindWindowW(None, "CCTopBarMenu")
+
+    def _tree_hwnd() -> int:
+        return user32.FindWindowW(None, "CCTopBarTree")
 
     class Api:
         def open_deck(self):
@@ -190,6 +195,41 @@ def _run_webview(cfg) -> bool:
             mw = state.get("menu_win")
             if mw is not None:
                 mw.hide()
+
+        def tree(self, payload, anchor_x_logical, rows):
+            """悬停展开会话树:定位到格子下方并注入成员列表。
+
+            与菜单同构(独立窗口 + 同一 GUI 队列的 move/show),原因见 MENU_W 处注释。
+            """
+            tw = state.get("tree_win")
+            if tw is None or not _tree_hwnd():
+                return
+            state["tree_wanted"] = True
+            k = dpi / 96
+            h = int(rows) * TREE_ROW_H + TREE_PAD
+            x = int(max(0, min(float(anchor_x_logical) - 12, screen_w / k - TREE_W - 4)))
+            hwnd = _tree_hwnd()
+            GWL_EXSTYLE, WS_EX_TOOLWINDOW, WS_EX_APPWINDOW = -20, 0x00000080, 0x00040000
+            ex = user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
+            user32.SetWindowLongW(hwnd, GWL_EXSTYLE, (ex | WS_EX_TOOLWINDOW) & ~WS_EX_APPWINDOW)
+            tw.evaluate_js(f"showTree({json.dumps(payload, ensure_ascii=False)})")
+            tw.resize(TREE_W, h)
+            tw.move(x, BAR_LOGICAL_H * state.get("rows", 1) + 2)
+            tw.show()
+            print(f"tree rows={rows} x={x}")
+
+        def tree_hover(self, inside):
+            """鼠标是否停在树窗口上。移出顶栏后的收起宽限期内进入树,则不收。"""
+            state["tree_hover"] = bool(inside)
+
+        def hide_tree(self):
+            # 鼠标已移到树上时不收 —— 两个独立窗口之间移动必然先触发顶栏的移出
+            if state.get("tree_hover"):
+                return
+            state["tree_wanted"] = False
+            tw = state.get("tree_win")
+            if tw is not None:
+                tw.hide()
 
         def set_rows(self, rows):
             """标签一行放不下时换两行:窗口与 AppBar 占位同步倍高。"""
@@ -263,6 +303,13 @@ def _run_webview(cfg) -> bool:
             "CCTopBarMenu",
             url=f"http://127.0.0.1:{port}/topbar_menu.html",
             x=0, y=bar_h, width=MENU_W, height=MENU_H,
+            min_size=(100, 10), frameless=True, on_top=True,
+            hidden=True, js_api=api, background_color="#10151d",
+        )
+        state["tree_win"] = webview.create_window(
+            "CCTopBarTree",
+            url=f"http://127.0.0.1:{port}/topbar_tree.html",
+            x=0, y=bar_h, width=TREE_W, height=TREE_ROW_H * 2 + TREE_PAD,
             min_size=(100, 10), frameless=True, on_top=True,
             hidden=True, js_api=api, background_color="#10151d",
         )

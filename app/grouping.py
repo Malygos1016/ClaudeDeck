@@ -105,6 +105,9 @@ def build_groups(sessions: list[dict], jobs: list[dict]) -> list[dict]:
     groups: list[dict] = []
     for root_sid, members in buckets.items():
         root = by_sid[root_sid]
+        # 树里父在上、子缩进在下。入参沿用活跃会话的排序(忙的在前),
+        # fork 子多半是 busy,不重排就会画成父子颠倒。
+        members.sort(key=lambda m: 0 if m.get("session_id") == root_sid else 1)
         # 持有窗口的是 interactive 的那个;fork 出的守护进程没有自己的窗口
         window_owner = next(
             (m for m in members if m.get("kind") != "bg"),

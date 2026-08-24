@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>CCTopBarTree</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; user-select: none; }
+  html, body { height: 100%; overflow: hidden; }
+  body {
+    background: #10151d; padding: 6px;
+    font-family: "Microsoft YaHei UI", "Segoe UI", sans-serif;
+    border: 1px solid rgba(160, 180, 210, 0.2);
+  }
+  .row {
+    display: flex; align-items: center; gap: 7px;
+    font-size: 12.5px; color: #c9d2df; padding: 6px 9px; border-radius: 6px;
+    cursor: pointer; white-space: nowrap;
+  }
+  .row:hover { background: rgba(226, 161, 60, 0.14); }
+  .row.nowin { cursor: pointer; }
+  .row.nowin .name { color: #9aa4b3; font-style: italic; }
+  /* 缩进出父子关系:fork 出来的挂在父下面一级 */
+  .row.child { padding-left: 20px; }
+  .dot { width: 7px; height: 7px; border-radius: 50%; flex: none; }
+  .dot.busy { background: #e2a13c; box-shadow: 0 0 7px rgba(226, 161, 60, 0.8); }
+  .dot.waiting { background: #d97060; box-shadow: 0 0 7px rgba(217, 112, 96, 0.9); }
+  .dot.idle { background: #58b884; box-shadow: 0 0 5px rgba(88, 184, 132, 0.5); }
+  .name { flex: 1; overflow: hidden; text-overflow: ellipsis; }
+  .fork { color: #e2a13c; flex: none; }
+  .meta { font-size: 11px; color: #6b7686; flex: none; }
+  .act { font-size: 11px; color: #6b7686; flex: none; }
+  .row:hover .act { color: #e2a13c; }
+</style>
+</head>
+<body>
+<div id="box"></div>
+<script>
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]));
+const box = document.getElementById("box");
+const PORT = location.port || 8737;
+let members = [];
+
+function hide() { window.pywebview?.api?.hide_tree(); }
+
+/* 由 Python 在悬停时注入调用。payload = {members:[...], root_sid} */
+function showTree(payload) {
+  members = (payload && payload.members) || [];
+  const rootSid = payload && payload.root_sid;
+  box.innerHTML = members.map((m, i) => {
+    const st = ["busy", "waiting", "idle"].includes(m.status) ? m.status : "idle";
+    const isChild = m.session_id !== rootSid;
+    const noWin = m.kind === "bg" && !m.attachable_window;
+    // 无窗口的作业点击是「接管」(claude attach),有窗口的是「跳过去」
+    const act = noWin ? "接管" : "跳转";
+    return `<div class="row ${isChild ? "child" : ""} ${noWin ? "nowin" : ""}"
+        data-sid="${esc(m.session_id)}" data-job="${esc(m.job_id || "")}"
+        data-nowin="${noWin ? 1 : 0}" title="${esc(m.cwd || "")}">
+      ${isChild ? '<span class="fork">⑂</span>' : ""}
+      <span class="dot ${st}"></span>
+      <span class="name">${esc(m.label)}</span>
+      <span class="meta">${esc(m.kind === "bg" ? "后台" : "终端")}</span>
+      <span class="act">${act}</span>
+    </div>`;
+  }).join("");
+}
+
+box.addEventListener("click", async (e) => {
+  const row = e.target.closest(".row");
+  if (!row) return;
+  const url = row.dataset.nowin === "1" && row.dataset.job
+    ? `http://127.0.0.1:${PORT}/api/jobs/${row.dataset.job}/attach`
+    : `http://127.0.0.1:${PORT}/api/live/${row.dataset.sid}/focus`;
+  try {
+    await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+  } finally { hide(); }
+});
+
+/* 鼠标在树上时不收:顶栏那边移出后有 250ms 宽限,进入这里即取消收起 */
+document.addEventListener("mouseenter", () => window.pywebview?.api?.tree_hover(true));
+document.addEventListener("mouseleave", () => window.pywebview?.api?.tree_hover(false));
+document.addEventListener("keydown", (e) => { if (e.key === "Escape") hide(); });
+document.addEventListener("contextmenu", (e) => e.preventDefault());
+</script>
+</body>
+</html>
