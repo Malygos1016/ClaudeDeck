@@ -5,7 +5,7 @@ import sqlite3
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
-from ..focus import FOCUS_LOCK, focus_by_title, focus_session_by_pid
+from ..focus import focus_group
 from ..grouping import build_groups
 from ..launcher import launch_attach
 from ..live import read_jobs, read_live_sessions
@@ -67,12 +67,10 @@ def focus_live_session(
             -_started_epoch_s(m),
         ),
     )
-    with FOCUS_LOCK:
-        for m in members:
-            res = focus_session_by_pid(m.get("pid"))
-            if res is not None:
-                return res
-        res = focus_by_title(_name_candidates(group))
+    # 编排全在 focus_group(专用 UIA 线程):快路径标题匹配(缓存热时亚秒,
+    # 唯一命中直接用)→ 零命中/歧义升级到标记法(零歧义精确定位)→ 全败时
+    # 沿用快路径的失败原因 —— 歧义名单比笼统的"没找到"有用。
+    res = focus_group([m.get("pid") for m in members], _name_candidates(group))
     if res["ok"]:
         return res
     if res.get("ambiguous"):

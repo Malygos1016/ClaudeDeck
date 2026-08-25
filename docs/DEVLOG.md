@@ -220,8 +220,23 @@ uRedPulse,uSq,uSqB0,uSqB1。JS 帧循环上传,全在 topbar.html。
 - 第 1 层 标记定位:helper 子进程 `AttachConsole(pid)` → 存原题 →
   `SetConsoleTitle("[CD#<pid>]")` → ConPTY 把标题变化转发给 WT 标签 → UIA 按
   标记找到即选中 → 恢复原题。标记是自己写的,与 CC 版本/fork/tag 全部解耦。
-  Spike 实测:标记约 **2.5s** 出现(WT 对 headless ConPTY 标题转发有节流,
-  不是毫秒级,等待上限设 4s),恢复无残留。
+  **延迟归因(2026-08-24 二轮实验,第一印象是冤案)**:spike 量到的"标记 2.5s
+  才出现"曾归因为 WT 转发节流 —— 错。用缓存好的 UIA 引用读 .Name,标记在
+  helper 返回瞬间(0ms)就已在标签上,**WT 转发是毫秒级**;2.5s 全部是 UIA 从
+  桌面根全量遍历的成本(单轮 2.2s,本机 6 个 WT 窗口 9 标签,XAML 岛 UIA 树
+  出名地慢)。对策:标签引用缓存(_tabs,TTL 300s)——全量扫描只在冷缓存时付
+  一次,之后 .Name 是毫秒级 live 调用,不会 stale(引用失效仅发生在标签被关,
+  读时抛异常触发重扫)。UIA COM 引用绑定创建线程,故 focus 全部操作固定在
+  常驻单线程执行器上跑,缓存才能跨请求复用。
+  另一坑:**busy 会话的 spinner 动画(◐/◑)高频重写标题会盖掉标记**(一轮
+  诊断实测三通道全 miss)——对策:未命中时每 0.6s 把标记重新压回去,和动画
+  抢写;缓存读取本身毫秒级轮询,标记只需存活一个轮询周期。
+  第三层地板:扫描优化后压测暴露 **SelectionItemPattern.Select() 本身 ~2.5s**
+  (副线程 GetWindowText 轮询证实动作就要 2.0s 才发生,不是干等返回,
+  fire-and-forget 无用)。同元素换 **LegacyIAccessible.DoDefaultAction():
+  调用返回 ~505ms 且返回时切换已完成**,5 倍提速、零新依赖,现为首选通道,
+  Select/Click 依次兜底。键盘 Ctrl+Alt+N 曾是候选,本机 WT 键绑定无响应,弃。
+  端到端:热缓存快路径 ~0.6s,标记法 ~1s;冷缓存首次仍付一次 2.2s 扫描。
 - 第 2 层 标题兜底:AttachConsole 失败(管理员 CC 的完整性级别/竞态)或标记被
   `suppressApplicationTitle` 吞掉时才回到 match_tab,且**多命中返回歧义列表**,
   不再盲取第一个;零命中如实 404 并指路"复制 resume 命令"。
@@ -231,9 +246,10 @@ uRedPulse,uSq,uSqB0,uSqB1。JS 帧循环上传,全在 topbar.html。
   主进程 FreeConsole 会弄坏自身 stdio;一个进程同时只能附加一个控制台。
 - 标题经 base64 走 helper 的 argv/stdout,任意字符(引号/换行/emoji)不破协议。
 - 并发聚焦用 FOCUS_LOCK 全局串行:标记法改的是全局控制台标题,交叉执行互相污染。
-- 路由端(liveboard.focus_live_session)按组内成员逐个尝试:先点击的 sid 自己的
-  实例(同 sid 多实例时按 startedAt 新进程优先——fork 后 resume 出的那个),
-  再组里其他成员,全败才落标题兜底。
+- 编排(focus_group,跑在专用 UIA 线程):**快路径先行** —— 标题精确匹配一次
+  (缓存热时亚秒),唯一命中直接用;零命中或多命中(歧义)才升级标记法拿
+  零歧义定位;标记法按组内成员逐个尝试(先点击的 sid 自己的实例,同 sid
+  多实例按 startedAt 新进程优先),全败沿用快路径的歧义名单报错。
 - OpenConsole 命令行只有 WT 进程内句柄(`--signal 0x1d38`),外部解引用不了,
   所以"宿主→具体标签"只能靠标记法,没有纯只读通路。
 
