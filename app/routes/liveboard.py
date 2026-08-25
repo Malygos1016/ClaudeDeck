@@ -5,7 +5,7 @@ import sqlite3
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
-from ..focus import focus_session
+from ..focus import FOCUS_LOCK, focus_by_title, focus_session_by_pid
 from ..grouping import build_groups
 from ..launcher import launch_attach
 from ..live import read_jobs, read_live_sessions
@@ -42,12 +42,12 @@ def focus_live_session(
     request: Request,
     con: sqlite3.Connection = Depends(request_db),
 ):
-    """把该会话所在的 Windows Terminal 标签拉到前台。
+    """把该会话所在的终端窗口/标签拉到前台。
 
-    不再按 kind=="bg" 一刀拦掉:bg 只说明它由守护进程驱动,不代表没有窗口。
-    fork 出的会话就是 bg,却与父会话共用一个真实窗口(2026-08-23 实测)。
-    改为按分组判断有没有窗口,并拿全组的名字去匹配 —— fork 之后父会话的窗口
-    标题会被改成子会话的名字,只拿自己的名字必然匹配不上。
+    三层定位(见 app/focus.py 模块注释):优先按进程身份(OS 查询 + 标题标记),
+    与 CC 版本、fork、tag 全部解耦;身份链走不通才落标题匹配兜底,且多命中
+    如实报歧义。组内成员逐个尝试:先点击的 sid 自己的实例(同 sid 多实例时
+    新进程优先 —— fork 后 resume 出的那个),再组里其他成员。
     """
     cfg = request.app.state.cfg
     group = _find_group(cfg, con, sid)
@@ -57,12 +57,45 @@ def focus_live_session(
         raise HTTPException(
             409, "这是没有窗口的后台作业,用「接管」在新终端里打开它。"
         )
-    res = focus_session(_name_candidates(group))
-    if not res["ok"]:
+    want = sid.lower()
+    # 主序:点谁先试谁。次序:其余成员新进程优先 —— 纯防御,build_groups 里
+    # _dedup_by_session 已把同 sid 去重到一条,这里通常只是稳定排序的兜底。
+    members = sorted(
+        group["members"],
+        key=lambda m: (
+            (m.get("session_id") or "").lower() != want,
+            -_started_epoch_s(m),
+        ),
+    )
+    with FOCUS_LOCK:
+        for m in members:
+            res = focus_session_by_pid(m.get("pid"))
+            if res is not None:
+                return res
+        res = focus_by_title(_name_candidates(group))
+    if res["ok"]:
+        return res
+    if res.get("ambiguous"):
         raise HTTPException(
-            404, "没找到对应的终端标签(标题可能刚刚变化或窗口已关),稍后再点一次。"
+            409, "多个终端标签同名,无法确定该跳哪个: " + " / ".join(res["ambiguous"])
         )
-    return res
+    raise HTTPException(
+        404, "没找到该会话的终端窗口(可能已关闭,或跑在第三方终端里);"
+             "可在详情页复制 resume 命令手动打开。"
+    )
+
+
+def _started_epoch_s(m: dict) -> float:
+    """成员的启动时刻,epoch 秒(仅作排序 key);解析不了当 0。"""
+    v = m.get("started_at")
+    if not v:
+        return 0.0
+    try:
+        from datetime import datetime
+
+        return datetime.fromisoformat(str(v).replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return 0.0
 
 
 def _hydrate(cfg, con) -> list[dict]:

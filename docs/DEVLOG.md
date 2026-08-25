@@ -200,6 +200,43 @@ Claude Code 本地会话管理器,解决三痛点:找回对话(中文全文搜�
 uRedPulse,uSq,uSqB0,uSqB1。JS 帧循环上传,全在 topbar.html。
 (uLogo 已随占比口径一并废除;uRed/uYel 更名 uRedEnd/uYelEnd 且语义由占比改为位置。)
 
+## 7.5 聚焦机制:三层身份链(2026-08-24 重构,废除"猜标题")
+
+**为什么废除标题匹配**——同一机制三次以三种方式失效,全部本机实测:
+1. CC 2.1.245 把标签标题从 ai-title 改成通用名 `Claude Code`(2.1.241 的
+   DEVLOG 数据事实随一次小版本作废),「名詞解釋」格子必然 404;
+2. resume 传 `--name` 把标签设成 tag 后,focus 候选 `[name, title]` 里没有 tag,
+   自家拉起的窗口自己找不到;
+3. 同名标签多命中时 `hits[0]` 盲取,表现为跳到别人的窗口。
+病根同一个:focus 靠字符串猜「CC 会往标签上写什么」,而那是上游随时会变的行为。
+
+**现行架构**(app/consolemark.py + app/focus.py,三层,逐层降级,每层诚实):
+- 第 0 层 身份查询:会话 PID → `NtQueryInformationProcess(hProc, 49)` → 控制台
+  宿主 PID(纯只读,毫秒级)。宿主是 WT 子进程 OpenConsole → 在某个 WT 标签里;
+  独立 conhost 带可见窗口 → 经典控制台,直接置前;都不是 → headless
+  (fork daemon / 第三方终端),这里没有可聚焦的窗口。
+  本机实测:9 个 WT 标签对应 9 个 OpenConsole 全挂在唯一 WindowsTerminal 下,
+  10 个注册表会话逐一查询全部正确分类(fork daemon 正确落 headless)。
+- 第 1 层 标记定位:helper 子进程 `AttachConsole(pid)` → 存原题 →
+  `SetConsoleTitle("[CD#<pid>]")` → ConPTY 把标题变化转发给 WT 标签 → UIA 按
+  标记找到即选中 → 恢复原题。标记是自己写的,与 CC 版本/fork/tag 全部解耦。
+  Spike 实测:标记约 **2.5s** 出现(WT 对 headless ConPTY 标题转发有节流,
+  不是毫秒级,等待上限设 4s),恢复无残留。
+- 第 2 层 标题兜底:AttachConsole 失败(管理员 CC 的完整性级别/竞态)或标记被
+  `suppressApplicationTitle` 吞掉时才回到 match_tab,且**多命中返回歧义列表**,
+  不再盲取第一个;零命中如实 404 并指路"复制 resume 命令"。
+
+**实现要点/坑**:
+- helper 必须是子进程:服务可能以 CREATE_NO_WINDOW 启动、自带隐藏控制台,
+  主进程 FreeConsole 会弄坏自身 stdio;一个进程同时只能附加一个控制台。
+- 标题经 base64 走 helper 的 argv/stdout,任意字符(引号/换行/emoji)不破协议。
+- 并发聚焦用 FOCUS_LOCK 全局串行:标记法改的是全局控制台标题,交叉执行互相污染。
+- 路由端(liveboard.focus_live_session)按组内成员逐个尝试:先点击的 sid 自己的
+  实例(同 sid 多实例时按 startedAt 新进程优先——fork 后 resume 出的那个),
+  再组里其他成员,全败才落标题兜底。
+- OpenConsole 命令行只有 WT 进程内句柄(`--signal 0x1d38`),外部解引用不了,
+  所以"宿主→具体标签"只能靠标记法,没有纯只读通路。
+
 ## 8. 调试与验收方法论(血泪版)
 
 - **GDI 截屏(PIL ImageGrab)拍不到 WebView2/DComp 内容**——会拍到"壁纸"以为窗口
