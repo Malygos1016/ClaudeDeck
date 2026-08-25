@@ -1,4 +1,4 @@
-<!doctype html>
+﻿<!doctype html>
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
@@ -392,7 +392,7 @@ function render(sessions) {
   if (!sessions || !sessions.length) {
     host.classList.remove("two-rows");
     host.innerHTML = `<span class="empty">${sessions ? "没有运行中的会话" : "ClaudeDeck 服务未运行"}</span>`;
-    window.pywebview?.api?.set_rows(1);
+    window.pywebview?.api?.set_rows?.(1);
     S.redEnd = S.yelEnd = 0; S.total = S.nRed = S.nYel = 0;
     prevActive = false;
     return;
@@ -420,7 +420,7 @@ function render(sessions) {
   const overflow = host.scrollWidth > host.clientWidth + 1;
   if (overflow) host.classList.add("two-rows");
   S.rows = overflow ? 2 : 1;
-  window.pywebview?.api?.set_rows(S.rows);
+  window.pywebview?.api?.set_rows?.(S.rows);
 
   // shader 状态:计数给 shader 判活,几何交给 measure()(见其注释,必须能重复调用)
   const nRed = sessions.filter((s) => s.status === "waiting").length;
@@ -447,7 +447,7 @@ function render(sessions) {
 tick(); setInterval(tick, 2000);
 // 行数独立执行:首次渲染可能早于 pywebview 桥注入(?. 静默吞掉 set_rows),
 // mock 等静态数据又不会触发重渲染——每轮兜底执行,Python 侧同值零开销
-setInterval(() => window.pywebview?.api?.set_rows(S.rows || 1), 2000);
+setInterval(() => window.pywebview?.api?.set_rows?.(S.rows || 1), 2000);
 window.addEventListener("pywebviewready", () => { lastSig = ""; tick(); });
 
 const post = (url) => fetch(url, { method: "POST",

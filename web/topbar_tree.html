@@ -30,6 +30,8 @@
   .meta { font-size: 11px; color: #6b7686; flex: none; }
   .act { font-size: 11px; color: #6b7686; flex: none; }
   .row:hover .act { color: #e2a13c; }
+  .stop { font-size: 12px; color: #6b7686; flex: none; padding: 0 5px; border-radius: 4px; }
+  .stop:hover { color: #d97060; background: rgba(217, 112, 96, 0.15); }
 </style>
 </head>
 <body>
@@ -61,14 +63,24 @@ function showTree(payload) {
       <span class="name">${esc(m.label)}</span>
       <span class="meta">${esc(m.kind === "bg" ? "后台" : "终端")}</span>
       <span class="act">${ACT_TEXT[action]}</span>
+      ${m.kind === "bg" && m.job_id ? `<span class="stop" data-stop="${esc(m.job_id)}" title="停止这个后台作业(attach 只是观看,关窗不停;记录保留,可再恢复)">✕</span>` : ""}
     </div>`;
   }).join("");
 }
 
 box.addEventListener("click", async (e) => {
+  const base = `http://127.0.0.1:${PORT}/api`;
+  const stopEl = e.target.closest(".stop");
+  if (stopEl) {
+    // 停止后台作业:与行点击(跳转/接管)分离,防误触
+    try {
+      await fetch(`${base}/jobs/${stopEl.dataset.stop}/stop`,
+        { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+    } finally { hide(); }
+    return;
+  }
   const row = e.target.closest(".row");
   if (!row) return;
-  const base = `http://127.0.0.1:${PORT}/api`;
   const { action, sid, job } = row.dataset;
   const url = action === "attach" && job ? `${base}/jobs/${job}/attach`
     : action === "resume" ? `${base}/sessions/${sid}/resume`

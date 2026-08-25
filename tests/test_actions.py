@@ -161,3 +161,33 @@ def test_config_put_and_rebuild(cfg):
         # 重建后台重扫;拿锁同步再扫一轮,数据应回来
         app.state.indexer.scan_once()
         assert c.get("/api/sessions").json()["total"] >= 1
+
+
+def test_stop_job(cfg, monkeypatch):
+    """停止后台作业:走官方 claude stop;job_id 必须在作业列表里。"""
+    import json as _json
+
+    from app.routes import liveboard
+
+    jd = cfg.claude_home_path / "jobs" / "abc12345"
+    jd.mkdir(parents=True)
+    (jd / "state.json").write_text(
+        _json.dumps({"name": "x", "state": "working", "tempo": "blocked", "sessionId": "s"}),
+        encoding="utf-8",
+    )
+    calls = []
+
+    class _P:
+        returncode = 0
+        stdout = "stopped abc12345"
+        stderr = ""
+
+    monkeypatch.setattr(
+        liveboard.subprocess, "run", lambda *a, **k: (calls.append(a[0]), _P)[1]
+    )
+    app = create_app(cfg)
+    with TestClient(app) as c:
+        r = c.post("/api/jobs/abc12345/stop")
+        assert r.status_code == 200 and r.json()["ok"] is True
+        assert calls[0][1:] == ["stop", "abc12345"]  # 只传白名单里的 id
+        assert c.post("/api/jobs/nope/stop").status_code == 404
