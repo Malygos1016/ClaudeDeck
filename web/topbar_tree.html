@@ -32,6 +32,9 @@
   .row:hover .act { color: #e2a13c; }
   .stop { font-size: 12px; color: #6b7686; flex: none; padding: 0 5px; border-radius: 4px; }
   .stop:hover { color: #d97060; background: rgba(217, 112, 96, 0.15); }
+  /* 已关掉的 fork 父分支:置灰但仍可点(点了把那条分支恢复回来) */
+  .row.closed .name { color: #7c8698; }
+  .row.closed .dot { background: #4a5261; box-shadow: none; }
 </style>
 </head>
 <body>
@@ -55,13 +58,15 @@ function showTree(payload) {
     const st = ["busy", "waiting", "idle"].includes(m.status) ? m.status : "idle";
     const isChild = m.session_id !== rootSid;
     const action = ACT_TEXT[m.action] ? m.action : "focus";
-    return `<div class="row ${isChild ? "child" : ""} ${action === "focus" ? "" : "nowin"}"
+    const closed = m.present === false;
+    return `<div class="row ${isChild ? "child" : ""} ${action === "focus" ? "" : "nowin"} ${closed ? "closed" : ""}"
         data-sid="${esc(m.session_id)}" data-job="${esc(m.job_id || "")}"
-        data-action="${esc(action)}" title="${esc(m.cwd || "")}">
+        data-action="${esc(action)}"
+        title="${esc(closed ? "这条分支已经关闭,点击把它恢复回来" : (m.cwd || ""))}">
       ${isChild ? '<span class="fork">⑂</span>' : ""}
       <span class="dot ${st}"></span>
       <span class="name">${esc(m.label)}</span>
-      <span class="meta">${esc(m.kind === "bg" ? "后台" : "终端")}</span>
+      <span class="meta">${esc(closed ? "已关闭" : m.kind === "bg" ? "后台" : "终端")}</span>
       <span class="act">${ACT_TEXT[action]}</span>
       ${m.kind === "bg" && m.job_id ? `<span class="stop" data-stop="${esc(m.job_id)}" title="停止这个后台作业(attach 只是观看,关窗不停;记录保留,可再恢复)">✕</span>` : ""}
     </div>`;

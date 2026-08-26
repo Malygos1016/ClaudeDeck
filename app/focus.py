@@ -271,6 +271,43 @@ def _subtract_in_window(hwnd: int, target_pid: int, tabs: list[object],
     return tabs[left[0]] if len(left) == 1 else None
 
 
+def _scan_marker_across_wt(pid: int) -> tuple[int, object] | None:
+    """跨所有 WT 窗口用标记法找这个会话的标签。返回 (hwnd, tab)。
+
+    给 defterm 模式用:那时会话与 WT 之间没有进程关系,无从先定窗口再定标签,
+    只能反过来 —— 注入唯一标记,谁显示出来就是谁。标记走的是控制台标题通道
+    (ConPTY 转发给 WT),与进程归属无关,故此路可通。
+    找不到就是真没有窗口(fork daemon / 第三方终端),照常返回 None。
+    """
+    old = mark_console(pid)
+    if old is None:
+        return None
+    marker = marker_for(pid)
+    try:
+        deadline = time.monotonic() + MARKER_WAIT_S
+        next_remark = time.monotonic() + _REMARK_EVERY_S
+        while time.monotonic() < deadline:
+            for win in _enum_wt_windows():
+                hwnd = win["hwnd"]
+                tabs = _window_tabs(hwnd)
+                if not tabs:
+                    continue
+                try:
+                    for t in tabs:
+                        if marker in (t.Name or ""):
+                            return hwnd, t
+                except Exception:
+                    continue
+            now = time.monotonic()
+            if now >= next_remark:      # spinner 抢写标题就再压回去
+                restore_console(pid, marker)
+                next_remark = now + _REMARK_EVERY_S
+            time.sleep(_POLL_S)
+        return None
+    finally:
+        restore_console(pid, old)
+
+
 def focus_session_by_pid(pid: int | None, candidates: list[str],
                          roster: list[dict] | None = None) -> dict | None:
     """按进程身份聚焦一个会话。返回成功结果;这里没有可聚焦的东西(无效
@@ -289,7 +326,23 @@ def focus_session_by_pid(pid: int | None, candidates: list[str],
             _force_foreground(hwnd)
             return {"ok": True, "tier": "window", "verified": True,
                     "matched_tab": None, "window": None, "tab_selected": True}
-        return None  # headless:fork daemon / 第三方终端
+        # defterm:Windows「默认终端应用」设为 WT 时,从 explorer/cmd 启动的
+        # 控制台由 WT 接管显示,但进程链上 WT 不是任何人的父 —— wt_host_of 认不出,
+        # 而那个控制台窗口本身不可见,于是 host_kind 判 headless。此时不能就此
+        # 放弃(用户实报"点击聚焦又不行了"):标记法不依赖进程关系,横扫 WT 窗口
+        # 即可命中。真正无窗口的 fork daemon 扫不到,照样返回 None。
+        found = _scan_marker_across_wt(pid)
+        if found is None:
+            return None  # headless:fork daemon / 第三方终端
+        hwnd, tab = found
+        _force_foreground(hwnd)
+        _select_tab(hwnd, tab)
+        try:
+            name = tab.Name
+        except Exception:
+            name = None
+        return {"ok": True, "tier": "defterm/marker", "verified": True,
+                "matched_tab": name, "window": None, "tab_selected": True}
     _host, wt_pid = hw
     hwnd = _resolve_window(pid, wt_pid, candidates)
     if hwnd is None:

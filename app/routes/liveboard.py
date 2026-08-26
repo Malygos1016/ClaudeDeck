@@ -7,7 +7,7 @@ import subprocess
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 from ..focus import focus_group
-from ..grouping import TERMINAL_JOB_STATES, build_groups
+from ..grouping import FORK_MARK, TERMINAL_JOB_STATES, build_groups
 from ..launcher import launch_attach
 from ..live import read_jobs, read_live_sessions
 from ..quota import quota_report
@@ -33,8 +33,37 @@ def live(
         s["title"] = row["title"] if row else None
         s["tag"] = tags.get(sid)
     # 一个窗口一个格子:丢掉 spare 空壳、把 fork 父子合成一组(见 app/grouping.py)
-    data["groups"] = build_groups(data["sessions"], read_jobs(cfg)["jobs"])
+    jobs = read_jobs(cfg)["jobs"]
+    data["groups"] = build_groups(
+        data["sessions"], jobs, absent_parents=_absent_parents(cfg, con, data["sessions"], jobs)
+    )
     return data
+
+
+def _absent_parents(cfg, con: sqlite3.Connection, sessions: list[dict], jobs: list[dict]) -> dict:
+    """已经关掉的 fork 父分支 → 它的显示名。
+
+    fork 关系写在作业记录里,是子会话的固有属性,父进程退出了也还在。树里要为
+    这些父列一个可恢复的灰节点,名字得从索引/标签里查(它们已不在运行注册表中)。
+    名字取用户 tag 优先,其次索引标题里叉子之前那截 —— fork 会把父会话的标题
+    也改写成带 ⑂ 的,原样用会让灰节点顶着子分支的名字。
+    """
+    live = {(s.get("session_id") or "").lower() for s in sessions}
+    tags = load_tags(cfg)
+    out: dict[str, dict] = {}
+    for j in jobs:
+        parent = (j.get("fork_parent_session_id") or "").lower()
+        if not parent or parent in live or parent in out:
+            continue
+        label = (tags.get(parent) or "").strip()
+        if not label:
+            row = con.execute(
+                "SELECT title FROM sessions WHERE session_id=?", (parent,)
+            ).fetchone()
+            label = ((row["title"] if row else "") or "").split(FORK_MARK)[0].strip()
+        if label:
+            out[parent] = {"label": label}
+    return out
 
 
 @router.post("/live/{sid}/focus")
@@ -52,7 +81,12 @@ def focus_live_session(
     """
     cfg = request.app.state.cfg
     sessions = _hydrate(cfg, con)
-    groups = build_groups(sessions, read_jobs(cfg)["jobs"])
+    jobs = read_jobs(cfg)["jobs"]
+    # 与 /api/live 用同一份分组(含已关闭父分支的幽灵节点),否则前端看到的树
+    # 与后端定位时算的组不是一回事,成员序号/归属会对不上。
+    groups = build_groups(
+        sessions, jobs, absent_parents=_absent_parents(cfg, con, sessions, jobs)
+    )
     want = sid.lower()
     group = next(
         (g for g in groups
@@ -65,10 +99,16 @@ def focus_live_session(
         raise HTTPException(
             409, "这是没有窗口的后台作业,用「接管」在新终端里打开它。"
         )
+    # 只拿还活着的成员去定位:已关闭的 fork 父分支是个没有进程的幽灵节点
+    # (pid 为空),混进来会污染按进程身份定位的通道 —— 它在树里的动作本就是
+    # resume,压根不该走到聚焦这条路。
+    alive = [m for m in group["members"] if m.get("present", True) and m.get("pid")]
+    if not alive:
+        raise HTTPException(409, "这条分支已经关闭,用「恢复」把它拉起来。")
     # 主序:点谁先试谁。次序:其余成员新进程优先 —— 纯防御,build_groups 里
     # _dedup_by_session 已把同 sid 去重到一条,这里通常只是稳定排序的兜底。
     members = sorted(
-        group["members"],
+        alive,
         key=lambda m: (
             (m.get("session_id") or "").lower() != want,
             -_started_epoch_s(m),
@@ -123,10 +163,19 @@ def _session_names(s: dict) -> list[str]:
     return out
 
 
+def _living_members(group: dict) -> list[dict]:
+    """组里还有进程的成员。已关闭的 fork 父分支是幽灵,不参与任何定位。"""
+    return [m for m in group["members"] if m.get("present", True) and m.get("pid")]
+
+
 def _name_candidates(group: dict) -> list[str]:
-    """全组的名字变体,规则与 _session_names 同一份。"""
+    """全组的名字变体,规则与 _session_names 同一份。
+
+    只取还活着的成员:已关闭的父分支不可能有窗口,它的名字进了候选只会
+    在兜底层制造假命中。
+    """
     out: list[str] = []
-    for m in group["members"]:
+    for m in _living_members(group):
         for v in _session_names(m):
             if v not in out:
                 out.append(v)

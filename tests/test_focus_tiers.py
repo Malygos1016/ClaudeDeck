@@ -223,7 +223,44 @@ def test_focus_session_own_window(monkeypatch):
 def test_focus_session_headless_gives_none(monkeypatch):
     monkeypatch.setattr(focus_mod, "wt_host_of", lambda pid: None)
     monkeypatch.setattr(focus_mod, "host_kind", lambda pid: ("headless", 0))
+    monkeypatch.setattr(focus_mod, "_scan_marker_across_wt", lambda pid: None)
     assert focus_mod.focus_session_by_pid(99, ["x"]) is None
+
+
+def test_focus_session_defterm_falls_back_to_marker_scan(monkeypatch):
+    """默认终端(defterm)模式:控制台由 WT 接管显示,但进程链上没有父子关系。
+
+    2026-08-26 实测本机:会话 6432 的宿主是 conhost(父 cmd ← explorer),
+    WindowsTerminal 进程一个子进程都没有,wt_host_of 认不出;而那个控制台窗口
+    本身不可见,host_kind 遂判 headless —— 于是直接放弃,用户实报"点击聚焦
+    又不行了"。标记法不依赖进程关系(同一实测:注入标记后 WT 标签立刻显示它),
+    横扫所有 WT 窗口即可命中。
+    """
+    monkeypatch.setattr(focus_mod, "wt_host_of", lambda pid: None)
+    monkeypatch.setattr(focus_mod, "host_kind", lambda pid: ("headless", 0))
+    target = _tab("[CD#6432]")
+    monkeypatch.setattr(focus_mod, "_scan_marker_across_wt", lambda pid: (0xB, target))
+    fg: list[int] = []
+    monkeypatch.setattr(focus_mod, "_force_foreground", lambda h: fg.append(h))
+    sel: list = []
+    monkeypatch.setattr(focus_mod, "_select_tab", lambda h, t: sel.append((h, t)))
+    res = focus_mod.focus_session_by_pid(6432, ["x"])
+    assert res["ok"] is True and res["verified"] is True
+    assert res["tier"] == "defterm/marker"
+    assert res["tab_selected"] is True
+    assert fg == [0xB] and sel == [(0xB, target)]
+
+
+def test_focus_session_own_window_skips_marker_scan(monkeypatch):
+    """经典控制台窗口有自己的窗口,不该多花标记法那 0.5 秒。"""
+    monkeypatch.setattr(focus_mod, "wt_host_of", lambda pid: None)
+    monkeypatch.setattr(focus_mod, "host_kind", lambda pid: ("own-window", 0x77))
+    called: list[int] = []
+    monkeypatch.setattr(focus_mod, "_scan_marker_across_wt",
+                        lambda pid: called.append(pid) or None)
+    monkeypatch.setattr(focus_mod, "_force_foreground", lambda h: None)
+    assert focus_mod.focus_session_by_pid(99, ["x"])["tier"] == "window"
+    assert called == []
 
 
 def test_focus_session_full_channel_selects_tab(monkeypatch):

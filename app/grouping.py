@@ -153,6 +153,43 @@ def _reconcile_job_links(live: list[dict], jobs: list[dict], by_job: dict[str, d
         by_job[sid] = job
 
 
+def _add_absent_parents(
+    live: list[dict], by_job: dict[str, dict], absent_parents: dict[str, dict]
+) -> list[dict]:
+    """为「已关闭的 fork 父分支」补一个幽灵成员,让 fork 关系不随父进程消失。
+
+    幽灵没有进程,故 has_terminal/owns_window 皆假、状态记 closed(不参与灯的
+    冒泡,STATUS_RANK 里没有它即排最末),动作自然落到 resume —— 点它就把那条
+    分支拉回来。查不到名字的不造:树里多一行没名字的东西比不显示更糟。
+    """
+    present = {s.get("session_id") for s in live}
+    ghosts: list[dict] = []
+    seen: set[str] = set()
+    for s in live:
+        job = by_job.get(s.get("session_id"))
+        parent = (job or {}).get("fork_parent_session_id")
+        if not parent or parent in present or parent in seen:
+            continue
+        label = ((absent_parents.get(parent) or {}).get("label") or "").strip()
+        if not label:
+            continue
+        seen.add(parent)
+        ghosts.append({
+            "session_id": parent,
+            "pid": None,
+            "kind": "absent",
+            "status": "closed",
+            "name": label,
+            "title": None,
+            "tag": None,
+            "present": False,
+            "alive": False,
+            "has_terminal": False,
+            "owns_window": False,
+        })
+    return ghosts + live if ghosts else live
+
+
 def _job_wants_attention(job: dict | None) -> bool:
     """作业是否在等用户。blocked 与 needs 都算,两者 CC 会各用一个。"""
     if not job:
@@ -170,11 +207,19 @@ def _rank(status: str) -> int:
     return STATUS_RANK.get(status, _UNKNOWN_RANK)
 
 
-def build_groups(sessions: list[dict], jobs: list[dict]) -> list[dict]:
+def build_groups(
+    sessions: list[dict],
+    jobs: list[dict],
+    absent_parents: dict[str, dict] | None = None,
+) -> list[dict]:
     """把活跃会话按「所属窗口」聚成组。
 
     sessions 取 ``read_live_sessions()`` 的形状,jobs 取 ``read_jobs()`` 的形状。
     返回的每一组就是顶栏上的一个格子,``members`` 是悬停展开的那棵树。
+
+    absent_parents 给出「已经关掉的 fork 父分支」的名字({sid: {"label": ...}}),
+    由调用方从索引/标签里查好。fork 关系写在作业记录里,是子会话的固有属性,
+    不随父进程存活与否消失,所以父关掉之后仍在树里列一个可恢复的灰节点。
     """
     by_job = _job_index(jobs)
 
@@ -190,6 +235,7 @@ def build_groups(sessions: list[dict], jobs: list[dict]) -> list[dict]:
     _reconcile_job_links(live, jobs, by_job)
     _mark_window_ownership(live, by_job)
     live = _dedup_by_session(live)
+    live = _add_absent_parents(live, by_job, absent_parents or {})
     by_sid = {s.get("session_id"): s for s in live}
 
     # 2. 认领:fork 子挂到父所在的组;父不在场时(已退出)自己独立成组
@@ -235,6 +281,8 @@ def build_groups(sessions: list[dict], jobs: list[dict]) -> list[dict]:
 
         for m in members:
             m["action"] = _member_action(m, root_sid, bool(forked), has_window, by_job)
+            # 树里每行的显示名后端算好,前端不再各算各的(幽灵节点也就自然有名字)
+            m["label"] = display_label(m)
 
         full_label = _group_label(root, members, by_job)
         root_job = by_job.get(root_sid)

@@ -161,6 +161,69 @@ def test_orphan_bg_with_job_can_attach():
     assert g["attach_job_id"] == "job123"
 
 
+# ---------- 父分支已关闭 ----------
+
+def test_absent_fork_parent_shows_as_closed_node():
+    """父分支关掉之后,fork 关系仍要在树里看得见,并且能一键恢复。
+
+    用户实报:本对话明明是 fork 出来的,悬停却看不到树 —— 因为父会话进程已退出,
+    组里只剩一个成员就不弹树了。但 fork 关系写在作业记录里,是这个会话的固有
+    属性,不随父进程存活与否消失;父分支关掉之后反而更需要一个找回去的入口。
+    """
+    child = sess("c", tag="AA")
+    jobs = [{"session_id": "c", "fork_parent_session_id": "gone"}]
+    g = build_groups([child], jobs=jobs, absent_parents={"gone": {"label": "ClaudeDeck開發"}})[0]
+    assert [m["session_id"] for m in g["members"]] == ["gone", "c"]
+    ghost = g["members"][0]
+    assert ghost["present"] is False
+    assert ghost["action"] == "resume"      # 点它就把那条分支拉回来
+    assert ghost["label"] == "ClaudeDeck開發"
+
+
+def test_absent_parent_does_not_hijack_the_lamp():
+    """已关闭的父不该影响格子的灯 —— 灯只反映还在跑的东西。"""
+    child = sess("c", status="busy")
+    jobs = [{"session_id": "c", "fork_parent_session_id": "gone"}]
+    g = build_groups([child], jobs=jobs, absent_parents={"gone": {"label": "父"}})[0]
+    assert g["status"] == "busy"
+
+
+def test_absent_parent_keeps_window_and_focus_on_the_living_child():
+    """幽灵节点没有进程,格子的跳转目标必须仍是活着的子。"""
+    child = sess("c", tag="AA", has_terminal=True)
+    jobs = [{"session_id": "c", "fork_parent_session_id": "gone"}]
+    g = build_groups([child], jobs=jobs, absent_parents={"gone": {"label": "父"}})[0]
+    assert g["has_window"] is True
+    assert g["focus_session_id"] == "c"
+    assert g["rename_session_id"] == "c"    # 重命名仍落在叉子后面那截
+
+
+def test_absent_parent_restores_the_full_label():
+    """格子名恢复成完整的「父 ⑂ 子」,而不是只剩子自己的名字。"""
+    child = sess("c", tag="AA")
+    jobs = [{"session_id": "c", "fork_parent_session_id": "gone"}]
+    g = build_groups([child], jobs=jobs, absent_parents={"gone": {"label": "ClaudeDeck開發"}})[0]
+    assert g["full_label"] == "ClaudeDeck開發 ⑂ AA"
+
+
+def test_absent_parent_ignored_when_parent_is_actually_running():
+    """父还活着就走原路径,不该凭空多出一个幽灵。"""
+    parent = sess("p", tag="父")
+    child = sess("c", kind="bg", has_terminal=False, tag="AA")
+    jobs = [{"session_id": "c", "fork_parent_session_id": "p"}]
+    g = build_groups([parent, child], jobs=jobs, absent_parents={"p": {"label": "不该用到"}})[0]
+    assert [m["session_id"] for m in g["members"]] == ["p", "c"]
+    assert g["members"][0].get("present") is not False
+
+
+def test_absent_parent_without_label_is_skipped():
+    """查不到名字的缺席父不造幽灵 —— 树里出现一行没名字的东西更糟。"""
+    child = sess("c", tag="AA")
+    jobs = [{"session_id": "c", "fork_parent_session_id": "gone"}]
+    g = build_groups([child], jobs=jobs, absent_parents={})[0]
+    assert [m["session_id"] for m in g["members"]] == ["c"]
+
+
 # ---------- 同一会话多实例 ----------
 
 def test_same_session_two_instances_collapse_to_one():

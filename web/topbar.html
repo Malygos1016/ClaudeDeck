@@ -500,18 +500,22 @@ function clearTreeKey() { treeKey = null; }
 
 function treePayload(g) {
   return {
-    root_sid: g.members.find((m) => m.kind !== "bg")?.session_id
-      || g.members[0]?.session_id,
+    // 树的根直接用后端定的 key(members 已按「根在首位」排好)。前端另算一套
+    // 会与后端不一致 —— 已关闭的父会被误判成子而缩进,层级正好反过来。
+    root_sid: g.key,
     members: g.members.map((m) => ({
       session_id: m.session_id,
       job_id: m.job_id || "",
       kind: m.kind,
       status: m.status,
       cwd: m.cwd || "",
-      label: m.tag || m.title || m.name || (m.session_id || "").slice(0, 8),
+      // 显示名由后端统一算(含已关闭父分支的幽灵节点),前端不再各算各的
+      label: m.label || m.tag || m.title || m.name || (m.session_id || "").slice(0, 8),
       // 后端算好的动作(focus/resume/attach)必须转发 —— 之前漏了这个字段,
       // 树端拿不到就全部退化成 focus,「恢复/接管」从来没生效过
       action: m.action || "",
+      // 已关掉的 fork 父分支:树里置灰列出,点它把那条分支恢复回来
+      present: m.present !== false,
     })),
   };
 }
