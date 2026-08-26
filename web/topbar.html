@@ -389,10 +389,12 @@ async function tick() {
   if (!groups) {
     try { groups = (await (await fetch("/api/live")).json()).groups; } catch { groups = null; }
   }
-  // 僵尸残留(作业终态、进程未退)不占顶栏格子(2026-08-25 用户拍板:
-  // 顶栏隐藏,deck 看板页仍可见、可清理)。在摄入口过滤,后面的格子渲染
-  // 与 shader 计数(nRed/nYel/total/色带几何)天然同一口径。
-  if (groups) groups = groups.filter((g) => !g.residual);
+  // 可见性规则(2026-08-26 用户拍板):顶栏只画「有实体窗口」或「在等你/
+  // 在干活」的组 —— 全家窗口都关掉的闲置后台整组隐藏(僵尸残留天然是其
+  // 子集),变 waiting/busy 自动重现,deck 看板页永远列全。在摄入口过滤,
+  // 后面的格子渲染与 shader 计数(nRed/nYel/total/色带几何)天然同一口径。
+  if (groups) groups = groups.filter(
+    (g) => g.has_window || g.status === "waiting" || g.status === "busy");
   const sig = JSON.stringify(groups);
   if (sig !== lastSig) { lastSig = sig; render(groups); }
 }
