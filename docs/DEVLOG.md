@@ -289,6 +289,19 @@ uRedPulse,uSq,uSqB0,uSqB1。JS 帧循环上传,全在 topbar.html。
   ~0.5s 是标签切换的地板(Select 要 2.5s)。第三方终端(宿主非 WT 的
   OpenConsole)仍如实报"没有可聚焦窗口"。
 
+**2026-08-26 /fork 默认后台 —— 窗口归属模型换代(用户真机 fork 实测)**:
+`/fork` 现在默认把子分支**直接送进后台守护,窗口留在父这边**,推翻 8/23 的
+「fork 就地发生、窗口跟子走」模型。连锁修正:窗口归属废除"按启动时刻与
+fork 时刻比"的启发式,改用**注册表直接事实**(sessions/<PID>.json 的
+sessionId 写着终端进程当前跑谁 —— 有终端的成员窗口显示的就是它自己;若
+"窗口跟子走"模式再现,注册表条目会自己切到子 sid,判据依然成立);树里
+成员动作随之修正 —— 无窗守护子不再给"跳转"(旧模型下点子只会跳去父窗、
+永远弹不出新窗,用户实报),改为 接管(作业在跑)/恢复(作业终态或无作业),
+都能弹出窗口。同场实测两条 CC 侧事实:(1) 存在**无 forkParentSessionId 的
+后台作业**(b2d051da,needs="send a prompt to start" 空壳),亲子链接缺失时
+ClaudeDeck 如实独立成组,不按名字猜;(2) 存在**注册表有条目、jobs 目录无
+state.json** 的守护(beb85591),read_jobs 已天然跳过。
+
 **2026-08-26 defterm 边界(A 机实测,38bd36c)**:Windows「默认终端应用」设为
 WT 时,从 explorer/cmd 启动的控制台由 WT 接管显示,但**进程链上 WT 不是任何人
 的父**(宿主是 conhost,父是 cmd/explorer;WindowsTerminal 零子进程)——

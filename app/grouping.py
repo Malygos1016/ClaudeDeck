@@ -14,8 +14,7 @@
 """
 from __future__ import annotations
 
-from datetime import datetime
-from typing import Any, Iterable
+from typing import Iterable
 
 FORK_MARK = "⑂"
 
@@ -78,46 +77,20 @@ def _instance_rank(s: dict) -> tuple[int, float]:
     return (0 if s.get("owns_window") else 1, _freshness(s))
 
 
-def _iso_to_epoch(v: Any) -> float | None:
-    if not isinstance(v, str) or not v:
-        return None
-    try:
-        return datetime.fromisoformat(v.replace("Z", "+00:00")).timestamp()
-    except ValueError:
-        return None
-
-
-def _mark_window_ownership(sessions: list[dict], by_job: dict[str, dict]) -> None:
+def _mark_window_ownership(sessions: list[dict]) -> None:
     """标记每个实例的窗口是不是在显示它自己。
 
-    fork 是在父会话的窗口里就地发生的,那之后窗口跑的是子分支,父分支在里面
-    回不去了。所以早于 fork 启动的父实例并不真正拥有窗口;晚于 fork 启动的
-    (即恢复出来的那个)才拥有。判据用启动时刻与 fork 时刻比,不用窗口标题
-    —— 标题会被 fork 改写,本就不可信。
-    """
-    live_sids = {s.get("session_id") for s in sessions}
-    fork_parents: set[str] = set()
-    boundary: dict[str, float] = {}
-    for j in by_job.values():
-        parent = j.get("fork_parent_session_id")
-        if not parent or j.get("session_id") not in live_sids:
-            continue          # 子分支已经不在场,不影响父的窗口归属
-        fork_parents.add(parent)
-        at = _iso_to_epoch(j.get("fork_boundary_at"))
-        if at is not None:
-            boundary[parent] = min(at, boundary.get(parent, at))
+    注册表直接事实:sessions/<PID>.json 的 sessionId 写着这个终端进程当前在跑
+    哪个会话 —— 有终端祖先的成员,窗口显示的就是它自己,不需要推断。
 
+    2026-08-26 实测推翻了 8/23 的「fork 就地发生、窗口跟子走」模型:/fork
+    默认把子分支直接送进后台守护,窗口留在父这边。旧的"按启动时刻与 fork
+    时刻比"启发式在新行为下会把父的窗口错判给守护子(点父=另开重复窗、
+    点子=跳去父窗且永远弹不出新窗,用户实报),废除;若日后再现"窗口跟子走"
+    的模式,注册表条目的 sessionId 会自己切到子 sid,本判据依然成立。
+    """
     for s in sessions:
-        owns = bool(s.get("has_terminal"))
-        sid = s.get("session_id")
-        if owns and sid in fork_parents:
-            at = boundary.get(sid)
-            started = _iso_to_epoch(s.get("started_at"))
-            # 起得比 fork 早 → 窗口已被子分支接管。
-            # 任一时间拿不到就保守视为被占:宁可多开一个窗口,也别把人送到
-            # 一个显示着别的分支的窗口前(那正是用户最初报的毛病)。
-            owns = at is not None and started is not None and started >= at
-        s["owns_window"] = owns
+        s["owns_window"] = bool(s.get("has_terminal"))
 
 
 def _freshness(s: dict) -> float:
@@ -146,9 +119,8 @@ def _reconcile_job_links(live: list[dict], jobs: list[dict], by_job: dict[str, d
         job = by_jid.get(s.get("job_id") or "")
         if job is None or sid in by_job:
             continue
-        # 同一个 dict 挂两个键即可:_mark_window_ownership 遍历 values 时
-        # 重复见到它是幂等的;把 session_id 字段一并改正,fork 归属检查
-        # (j.session_id in live_sids)才认得这个还活着的 worker。
+        # 同一个 dict 挂两个键即可,重复引用是幂等的;把 session_id 字段
+        # 一并改正,让后续按 j.session_id 读作业的逻辑认得这个活 worker。
         job["session_id"] = sid
         by_job[sid] = job
 
@@ -233,7 +205,7 @@ def build_groups(
         if not s.get("spare") and s.get("entrypoint", "cli") != "sdk-cli"
     ]
     _reconcile_job_links(live, jobs, by_job)
-    _mark_window_ownership(live, by_job)
+    _mark_window_ownership(live)
     live = _dedup_by_session(live)
     live = _add_absent_parents(live, by_job, absent_parents or {})
     by_sid = {s.get("session_id"): s for s in live}
@@ -348,7 +320,10 @@ def _member_action(
         return "focus" if m.get("owns_window") else "resume"
     if m.get("has_terminal"):
         return "focus"
-    if sid != root_sid and has_window:
+    if sid != root_sid and has_window and m.get("owns_window"):
+        # 只有真正持有窗口的成员才是"跳转"。/fork 默认后台(2026-08-26 实测):
+        # 子分支是无窗守护,窗口留在父 —— 点子分支该 接管/恢复(能弹出窗口),
+        # 不是跳去父的窗口干瞪眼(用户实报"通过树点分支拉不起对话框")。
         return "focus"
     job = by_job.get(sid)
     if job and job.get("job_id") and job.get("state") not in TERMINAL_JOB_STATES:

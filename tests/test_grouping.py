@@ -261,68 +261,44 @@ def test_fork_group_with_duplicated_parent_still_has_two_rows():
 
 # ---------- 每个成员点下去做什么 ----------
 
-def test_fork_parent_action_is_resume():
-    """点 fork 的父节点要 resume 开新窗口,不是激活窗口。
+def test_fork_family_actions_follow_registry_truth():
+    """带终端的父=跳转,无窗守护子=恢复/接管。
 
-    fork 是在父会话的窗口里就地发生的,那个窗口现在跑的是子分支,父分支在里面
-    回不去了。而 fork 的意义正是一个上下文分支成两条各自推进(用户原话),
-    父分支必须能单独拉起来,否则 fork 就废了一半。
+    2026-08-26 实测推翻了 8/23 的「fork 就地发生、窗口跟子走」模型:/fork
+    默认把子分支直接送进后台守护,窗口留在父这边。注册表条目(PID→sessionId)
+    就是"窗口在跑谁"的直接事实:有终端的成员窗口显示的就是它自己。旧模型下
+    点子分支被判成 focus,只会跳去父的窗口、永远弹不出新窗(用户实报
+    "通过树点分支拉不起对话框")。
     """
     parent = sess("p", tag="父", has_terminal=True)
     child = sess("c", kind="bg", has_terminal=False)
     jobs = [{"session_id": "c", "fork_parent_session_id": "p"}]
     g = build_groups([parent, child], jobs=jobs)[0]
     acts = {m["session_id"]: m["action"] for m in g["members"]}
-    assert acts["p"] == "resume"   # 父:窗口已被子占,只能另开
-    assert acts["c"] == "focus"    # 子:窗口里跑的就是它,跳过去即可
+    assert acts["p"] == "focus"    # 父:窗口就是它的,跳过去
+    assert acts["c"] == "resume"   # 子:无窗守护且无可接管作业,恢复=弹新窗
 
 
-def test_fork_parent_recovered_after_fork_is_focus_not_resume():
-    """父分支恢复过一次之后,它已经有自己的窗口了,再点该跳过去而不是又开一个。
-
-    用户实报点父节点不能跳转聚焦 —— 因为动作被写死成 resume,每点一次多一个窗口。
-    判据是实例的启动时刻:早于 fork 的那个,窗口已经切去跑子分支了;
-    晚于 fork 的那个,是恢复出来的,窗口显示的就是父分支本身。
-    """
-    parent = sess("p", tag="父", has_terminal=True, started_at="2026-08-24T03:00:00.000Z")
-    child = sess("c", kind="bg", has_terminal=False)
-    jobs = [{
-        "session_id": "c", "fork_parent_session_id": "p",
-        "fork_boundary_at": "2026-08-24T01:50:00.000Z",
-    }]
+def test_fork_child_with_running_job_is_attach():
+    """无窗守护子带着还在跑的作业:接管(新终端里打开),同样能弹出窗口。"""
+    parent = sess("p", tag="父", has_terminal=True)
+    child = sess("c", kind="bg", has_terminal=False, job_id="jc")
+    jobs = [{"session_id": "c", "job_id": "jc", "state": "working",
+             "fork_parent_session_id": "p"}]
     g = build_groups([parent, child], jobs=jobs)[0]
-    acts = {m["session_id"]: m["action"] for m in g["members"]}
-    assert acts["p"] == "focus"
+    assert {m["session_id"]: m["action"] for m in g["members"]}["c"] == "attach"
 
 
-def test_fork_parent_started_before_fork_is_resume():
-    """fork 之前就在跑的父实例:窗口已被子分支占用,只能另开。"""
-    parent = sess("p", tag="父", has_terminal=True, started_at="2026-08-24T00:10:00.000Z")
+def test_dedup_prefers_recently_active_among_window_owners():
+    """同一会话两个带窗实例并存:都真持有窗口(注册表事实),留最近活跃的
+    那个 —— 那是用户正用着的。"""
+    active = sess("p", pid=1, status_seconds=5)
+    stale = sess("p", pid=2, status_seconds=900)
     child = sess("c", kind="bg", has_terminal=False)
-    jobs = [{
-        "session_id": "c", "fork_parent_session_id": "p",
-        "fork_boundary_at": "2026-08-24T01:50:00.000Z",
-    }]
-    g = build_groups([parent, child], jobs=jobs)[0]
-    assert {m["session_id"]: m["action"] for m in g["members"]}["p"] == "resume"
-
-
-def test_dedup_prefers_the_instance_that_owns_its_window():
-    """父会话两个实例并存时,留下真正显示父分支的那个(fork 之后恢复的),
-
-    而不是单纯取最近活跃 —— 用户在旧窗口(跑着子分支)里一动,旧实例就成了
-    最近活跃,父节点的动作会在 focus/resume 之间来回跳。
-    """
-    before = sess("p", pid=1, status_seconds=5, started_at="2026-08-24T00:10:00.000Z")
-    after = sess("p", pid=2, status_seconds=900, started_at="2026-08-24T03:00:00.000Z")
-    child = sess("c", kind="bg", has_terminal=False)
-    jobs = [{
-        "session_id": "c", "fork_parent_session_id": "p",
-        "fork_boundary_at": "2026-08-24T01:50:00.000Z",
-    }]
-    g = build_groups([before, after, child], jobs=jobs)[0]
+    jobs = [{"session_id": "c", "fork_parent_session_id": "p"}]
+    g = build_groups([active, stale, child], jobs=jobs)[0]
     parent_row = next(m for m in g["members"] if m["session_id"] == "p")
-    assert parent_row["pid"] == 2
+    assert parent_row["pid"] == 1
     assert parent_row["action"] == "focus"
 
 
