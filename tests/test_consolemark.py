@@ -74,12 +74,42 @@ def test_host_kind_self_pid_shape():
 
 
 def test_wt_host_of_shape():
-    """排除法的宿主查询:只验不抛、形状对(None 或 (宿主pid, WT pid) 二元组);
+    """窗口通道的宿主查询:只验不抛、形状对(None 或 (宿主pid, WT pid) 二元组);
     具体归属由运行环境的终端形态决定,断言死了就是在测环境。"""
     r = wt_host_of(os.getpid())
     assert r is None or (
         isinstance(r, tuple) and len(r) == 2 and all(isinstance(x, int) for x in r)
     )
+
+
+# ---------- console_window_owner:helper 协议(pytest 自带控制台,走 helper 分支) ----------
+
+
+def test_console_window_owner_parses_helper_hex(monkeypatch):
+    """自己带着控制台时必须走 helper(进程内 FreeConsole 会弄丢自己的控制台);
+    helper 回 'OK <hex句柄>',解析成 int。"""
+    monkeypatch.setattr(consolemark, "_run_helper", lambda *a: "OK 10a3c")
+    monkeypatch.setattr(
+        consolemark.ctypes.windll.kernel32, "GetConsoleWindow", lambda: 1, raising=False
+    )
+    assert consolemark.console_window_owner(123) == 0x10A3C
+
+
+def test_console_window_owner_zero_owner_is_none(monkeypatch):
+    """伪窗口没有 owner(第三方 ConPTY 场景):0 归一化为 None,调用方走兜底。"""
+    monkeypatch.setattr(consolemark, "_run_helper", lambda *a: "OK 0")
+    monkeypatch.setattr(
+        consolemark.ctypes.windll.kernel32, "GetConsoleWindow", lambda: 1, raising=False
+    )
+    assert consolemark.console_window_owner(123) is None
+
+
+def test_console_window_owner_helper_error_is_none(monkeypatch):
+    monkeypatch.setattr(consolemark, "_run_helper", lambda *a: "ERR 5")
+    monkeypatch.setattr(
+        consolemark.ctypes.windll.kernel32, "GetConsoleWindow", lambda: 1, raising=False
+    )
+    assert consolemark.console_window_owner(123) is None
 
 
 # ---------- mark_console / restore_console:base64 协议(monkeypatch,零真实 attach) ----------

@@ -98,15 +98,61 @@ def _wt_parent_of(host_pid: int) -> int | None:
 def wt_host_of(pid: int) -> tuple[int, int] | None:
     """pid 的控制台宿主若是 WT 的 OpenConsole → (宿主 pid, WT 进程 pid);否则 None。
 
-    排除法的计数单位:多个会话可能共享同一个宿主(fork 就地共窗),按宿主
-    去重才是"一个标签一个单元"的正确口径。WT 进程 pid 用于提权窗口剔除
-    (提权 WT 是独立进程,见 focus.focus_by_elimination)。
+    WT 进程 pid 是窗口通道的第一跳:该进程只有一扇窗就直接定窗,多扇窗再用
+    console_window_owner 精确定(见 focus._resolve_window)。多个会话可能共享
+    同一个宿主(fork 就地共窗),窗内减法按宿主口径处理。
     """
     host = console_host_of(pid)
     if not host:
         return None
     wt = _wt_parent_of(host)
     return (host, wt) if wt else None
+
+
+GW_OWNER = 4
+
+
+def console_window_owner(pid: int) -> int | None:
+    """pid 控制台的 ConPTY 伪窗口 owner = 托管它的真实 WT 窗口句柄。
+
+    2026-08-25 八会话全对实证:GetConsoleWindow 拿到的 PseudoConsoleWindow,
+    其 GW_OWNER 精确指向所在 WT 窗口(CASCADIA),改名/锁题全免疫 —— 这是
+    "会话在哪扇窗"的 OS 权威答案。跨完整性级别 attach 不了(提权目标)或
+    无控制台 → None,调用方走标题兜底。
+
+    自己没控制台(服务是 pythonw)就进程内直查(~1ms);自己带着控制台
+    (pytest/命令行)必须走 helper 子进程 —— 进程内 FreeConsole 会把自己的
+    控制台弄丢。
+    """
+    k = ctypes.windll.kernel32
+    if k.GetConsoleWindow():
+        out = _run_helper("owner", str(pid), "-")
+        if out is not None and out.startswith("OK"):
+            try:
+                return int(out[2:].strip() or "0", 16) or None
+            except ValueError:
+                return None
+        return None
+    return _owner_query_inproc(pid)
+
+
+def _owner_query_inproc(pid: int) -> int | None:
+    """进程内 attach → GetConsoleWindow → GW_OWNER → detach。只在自身无控制台
+    时调用(console_window_owner 已把关);attach 期间忽略目标控制台的 Ctrl
+    事件,免得别人窗里的 Ctrl+C 打进本进程。"""
+    k = ctypes.windll.kernel32
+    u = ctypes.windll.user32
+    k.SetConsoleCtrlHandler(None, True)
+    k.FreeConsole()
+    if not k.AttachConsole(pid):
+        return None
+    try:
+        cw = k.GetConsoleWindow()
+        if not cw:
+            return None
+        return int(u.GetWindow(cw, GW_OWNER)) or None
+    finally:
+        k.FreeConsole()
 
 
 def host_kind(pid: int) -> tuple[str, int]:
@@ -161,10 +207,11 @@ def restore_console(pid: int, title: str) -> bool:
 
 
 def _helper_main(argv: list[str]) -> int:
-    """helper 子进程入口:python -m app.consolemark mark|restore <pid> <arg>。
+    """helper 子进程入口:python -m app.consolemark mark|restore|owner <pid> <arg>。
 
     mark    <pid> <marker明文>  → 'OK <base64原题>' / 'ERR <winerr>'
     restore <pid> <base64标题>  → 'OK' / 'ERR <winerr>'
+    owner   <pid> -             → 'OK <hex窗口句柄>' / 'ERR <winerr>'
     """
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8")
@@ -193,6 +240,11 @@ def _helper_main(argv: list[str]) -> int:
                 print(f"ERR {k.GetLastError()}")
                 return 2
             print("OK")
+            return 0
+        if mode == "owner":
+            cw = k.GetConsoleWindow()
+            owner = ctypes.windll.user32.GetWindow(cw, GW_OWNER) if cw else 0
+            print(f"OK {int(owner):x}")
             return 0
         print("ERR mode")
         return 2

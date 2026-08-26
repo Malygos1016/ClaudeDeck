@@ -74,38 +74,14 @@ def focus_live_session(
             -_started_epoch_s(m),
         ),
     )
-    # roster = 全量注册表会话(含 spare/sdk-cli):排除法的闭世界计数要数
-    # "每一个占着 WT 标签的控制台",预过滤会把计数弄错(见 focus_by_elimination)。
+    # roster = 全量注册表会话(含 spare/sdk-cli):窗内减法要知道"这扇窗里
+    # 还有谁",按 owner 通道逐个实证成员资格(见 focus._subtract_in_window)。
     roster = [{"pid": s.get("pid"), "names": _session_names(s)} for s in sessions]
-    # 编排全在 focus_group(专用 UIA 线程):快路径标题匹配 → 标记法(零歧义
-    # 定位)→ 排除法(锁题标签的演绎定位)→ 携诊断的失败。
+    # 窗口通道(见 app/focus.py 模块注释):会话 → WT 窗口是 OS 权威查询,
+    # 窗口解析成功就必定 ok —— 最坏也是正确窗口置前 + tab_selected=False。
     res = focus_group([m.get("pid") for m in members], _name_candidates(group), roster)
     if res["ok"]:
         return res
-    extra = ""
-    if res.get("unaccounted"):
-        extra = ("排除法也未能唯一定位:" + " / ".join(map(str, res["unaccounted"]))
-                 + ";关掉多余的非 CC 终端标签后重试也可。")
-    reason = res.get("reason")
-    if reason == "marker-suppressed":
-        # 标记写进控制台了却没上标签:WT 对该标签停止了应用标题转发(手动
-        # 重命名锁题)。排除法也没兜住时,指路解锁而不是装作没找到。
-        hint = (res.get("console_title") or "").strip()
-        raise HTTPException(
-            409, "找到了该会话的终端,但它的标签被手动重命名锁定,标记与标题"
-                 "都定位不到。解锁:在 WT 里双击那个标签,清空名字后回车,"
-                 "恢复自动标题即可一键跳转。"
-                 + (f"(该会话想显示的标题是「{hint}」)" if hint else "") + extra
-        )
-    if reason == "attach-failed":
-        raise HTTPException(
-            409, "该会话的终端以管理员权限运行,普通权限的本服务无法附加其"
-                 "控制台做标记定位。" + (extra or "可手动切换到那个管理员窗口。")
-        )
-    if res.get("ambiguous"):
-        raise HTTPException(
-            409, "多个终端标签同名,无法确定该跳哪个: " + " / ".join(res["ambiguous"])
-        )
     raise HTTPException(
         404, "没找到该会话的终端窗口(可能已关闭,或跑在第三方终端里);"
              "可在详情页复制 resume 命令手动打开。"
