@@ -52,11 +52,19 @@ FOCUS_LOCK = threading.Lock()
 
 # UIA COM 引用绑定创建线程 —— 全部 UIA 操作固定在这一个常驻工作线程上,
 # 标签引用缓存(见 _tabs)才能跨请求复用;FastAPI 的请求线程池不保证同线程。
+# 常驻 COM 初始化器的强引用。UIAutomationInitializerInThread.__del__ 会
+# CoUninitialize,不存引用就是创建即销毁 —— 之前能跑通全靠 comtypes 恰好在
+# 本线程首次 import 时自带一次进程级 CoInitializeEx(import 顺序的巧合,
+# 任何模块先在别的线程 import comtypes 就破功)。存住引用把意图变成事实。
+_UIA_INIT: object | None = None
+
+
 def _focus_thread_init() -> None:
+    global _UIA_INIT
     import uiautomation as auto
 
     # 常驻初始化,进程存活期间不 CoUninitialize —— 缓存引用要一直可用
-    auto.UIAutomationInitializerInThread()
+    _UIA_INIT = auto.UIAutomationInitializerInThread()
 
 
 _EXECUTOR = ThreadPoolExecutor(
@@ -122,7 +130,8 @@ def _force_foreground(hwnd: int) -> None:
 
 
 def _collect_tabs() -> list[tuple[object, object]]:
-    """收集所有 WT 窗口的 (窗口, 标签) 对。每次全量重扫 —— UIA 引用跨轮询不可靠。"""
+    """全量收集所有 WT 窗口的 (窗口, 标签) 对。单轮 ~2.2s(桌面根遍历),
+    所以只在冷缓存/显式刷新时调用;引用本身可跨请求复用(见 _tabs 缓存)。"""
     import uiautomation as auto
 
     out: list[tuple[object, object]] = []
