@@ -253,6 +253,21 @@ uRedPulse,uSq,uSqB0,uSqB1。JS 帧循环上传,全在 topbar.html。
 - OpenConsole 命令行只有 WT 进程内句柄(`--signal 0x1d38`),外部解引用不了,
   所以"宿主→具体标签"只能靠标记法,没有纯只读通路。
 
+**2026-08-25 补丁(用户实报两个格子点了没反应,排查出四件事)**:
+- **WT 手动重命名会锁题,标记法对锁死的标签无解**:实证是标签定格在旧
+  ai-title(`设计非代码能力培养平台架构`)而控制台内部标题早已换新
+  (`vibecoding-v2-platform-design`)——两者脱节即锁题铁证。mark 成功 +
+  标记始终不上屏 ⇒ 判定 marker_suppressed,路由回 409 指路解锁(双击标签
+  清空名字回车恢复自动标题),并附控制台真实标题帮用户认标签。不装"没找到"。
+- **fork 作业的 worker 会话 id 会演化,state.json 的 session_id 停在创建时**
+  (作业 9877837f 记着 9877837f-…,活 worker 已是 ed2bd59a-…)。注册表条目的
+  `jobId` 才是权威链接,grouping 按它把作业补挂到 worker 当前 sid 下
+  (_reconcile_job_links),否则 blocked 映射/attach 动作/组 attach_job_id 全断。
+- **treePayload 一直没转发后端算好的 member.action**,树端全部退化成 focus,
+  「恢复/接管」从未生效过 —— 分支首版就漏了,不是合并事故。已补。
+- **点击失败原先静默吞掉**(post 不看响应),用户分不清"没点上"还是"去不成"。
+  现在格子红闪半秒(.cell.deny),无窗口且无作业的死格子点击同样红闪。
+
 ## 8. 调试与验收方法论(血泪版)
 
 - **GDI 截屏(PIL ImageGrab)拍不到 WebView2/DComp 内容**——会拍到"壁纸"以为窗口

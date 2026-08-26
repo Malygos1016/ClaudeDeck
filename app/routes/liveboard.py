@@ -78,6 +78,16 @@ def focus_live_session(
         raise HTTPException(
             409, "多个终端标签同名,无法确定该跳哪个: " + " / ".join(res["ambiguous"])
         )
+    if res.get("marker_suppressed"):
+        # 会话找到了、标记也写进控制台了,是 WT 标签不显示应用标题(手动
+        # 重命名会锁题)。指路解锁而不是装作没找到。
+        hint = (res.get("console_title") or "").strip()
+        raise HTTPException(
+            409, "找到了该会话的终端,但它的标签被手动重命名锁定,程序改不动"
+                 "标题、也就定位不到具体标签。解锁:在 WT 里双击那个标签,"
+                 "清空名字后回车,恢复自动标题即可一键跳转。"
+                 + (f"(该会话想显示的标题是「{hint}」)" if hint else "")
+        )
     raise HTTPException(
         404, "没找到该会话的终端窗口(可能已关闭,或跑在第三方终端里);"
              "可在详情页复制 resume 命令手动打开。"

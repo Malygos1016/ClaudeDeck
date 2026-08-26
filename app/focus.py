@@ -220,7 +220,14 @@ def focus_session_by_pid(pid: int | None) -> dict | None:
                 restore_console(pid, marker)  # 语义即 SetConsoleTitle(任意串)
                 next_remark = now + _REMARK_EVERY_S
             time.sleep(_POLL_S)
-        return None  # 标记始终没出现(如 suppressApplicationTitle),降级
+        # 标记写进控制台了(mark 成功)却始终没上标签:WT 对这个标签停止了
+        # 应用标题转发 —— 手动重命名会锁题(2026-08-25 实报:标签定格在旧
+        # ai-title,控制台内部标题早已换新),或 profile 开了
+        # suppressApplicationTitle。这不是"没找到",要如实告诉用户怎么解锁,
+        # 所以带回诊断与控制台真实标题,不能只回 None。
+        return {"ok": False, "tier": "marker", "verified": False,
+                "matched_tab": None, "window": None,
+                "marker_suppressed": True, "console_title": strip_glyph(old)}
     finally:
         restore_console(pid, old)
 
@@ -266,10 +273,18 @@ def focus_group(pids: list[int | None], candidates: list[str]) -> dict:
             fast = focus_by_title(candidates)
             if fast["ok"]:
                 return fast
+            suppressed: dict | None = None
             for pid in pids:
                 res = focus_session_by_pid(pid)
-                if res is not None:
+                if res is None:
+                    continue
+                if res.get("ok"):
                     return res
+                # 标记被锁题的标签吞掉:记下诊断,余下成员继续试
+                suppressed = suppressed or res
+            if suppressed is not None:
+                suppressed["ambiguous"] = fast.get("ambiguous")
+                return suppressed
             return fast  # 全败:快路径的歧义名单比笼统 404 有用
 
     return _EXECUTOR.submit(_run).result(timeout=60)

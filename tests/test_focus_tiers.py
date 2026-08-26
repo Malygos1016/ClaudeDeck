@@ -167,6 +167,57 @@ def test_focus_group_zero_hits_tries_pids_in_order_until_hit(monkeypatch):
     assert pid_calls == [111, 222]  # 命中即停,333 不该被尝试
 
 
+def test_marker_timeout_reports_suppressed_with_console_title(monkeypatch):
+    """标记写进控制台了(mark 成功)却始终没上标签:不是"没找到",是 WT 对
+    这个标签停止了应用标题转发(手动重命名锁题 / suppressApplicationTitle)。
+    必须带回诊断与控制台真实标题让路由指路解锁,不能只回 None(用户实报:
+    「CofeChat」格子点了没反应,查下来标签定格在旧 ai-title)。"""
+    monkeypatch.setattr(focus_mod, "host_kind", lambda pid: ("wt-tab", 0))
+    monkeypatch.setattr(focus_mod, "mark_console", lambda pid: "✳ 真实标题")
+    restored: list[str] = []
+    monkeypatch.setattr(
+        focus_mod, "restore_console", lambda pid, t: (restored.append(t), True)[1]
+    )
+    monkeypatch.setattr(focus_mod, "_scan_cached_names", lambda marker: None)
+    monkeypatch.setattr(focus_mod, "MARKER_WAIT_S", 0.05)
+
+    res = focus_mod.focus_session_by_pid(4321)
+
+    assert res is not None and res["ok"] is False
+    assert res["marker_suppressed"] is True
+    assert res["console_title"] == "真实标题"  # strip_glyph 剥掉 ✳ 前缀
+    assert restored[-1] == "✳ 真实标题"        # finally 里恢复了原题
+
+
+def test_focus_group_carries_suppressed_diagnosis_over_pid_misses(monkeypatch):
+    """锁题诊断不终止尝试:组里其他成员仍要逐个试(它们可能在没锁的标签里);
+    全败时把诊断透传出去,路由靠 marker_suppressed 给出解锁指引而不是笼统 404。"""
+    fast_miss = {
+        "ok": False, "matched_tab": None, "window": None,
+        "tier": "title", "ambiguous": None,
+    }
+    monkeypatch.setattr(focus_mod, "focus_by_title", lambda candidates: fast_miss)
+    suppressed = {
+        "ok": False, "tier": "marker", "verified": False,
+        "matched_tab": None, "window": None,
+        "marker_suppressed": True, "console_title": "真实标题",
+    }
+    seq = {111: None, 222: suppressed, 333: None}
+    calls: list[int] = []
+
+    def fake_focus_by_pid(pid):
+        calls.append(pid)
+        return seq[pid]
+
+    monkeypatch.setattr(focus_mod, "focus_session_by_pid", fake_focus_by_pid)
+
+    res = focus_mod.focus_group([111, 222, 333], ["x"])
+
+    assert res["marker_suppressed"] is True
+    assert res["console_title"] == "真实标题"
+    assert calls == [111, 222, 333]  # 诊断记下后,后面的成员照样都试过
+
+
 def test_focus_group_all_fail_returns_fast_path_with_ambiguous(monkeypatch):
     """两层都没找到:回落到快路径的结果 —— ambiguous 字段原样透传,比逐 pid
     都失败后再造一个笼统的失败更有用(路由层靠这个字段区分 404 与 409)。"""

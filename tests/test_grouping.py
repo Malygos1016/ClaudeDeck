@@ -410,3 +410,40 @@ def test_groups_sort_urgent_first():
     c = sess("c", status="busy", tag="忙的")
     labels = [g["label"] for g in build_groups([a, b, c], jobs=[])]
     assert labels == ["等你的", "忙的", "闲的"]
+
+
+# ---------- 作业链接:注册表 jobId 是权威 ----------
+
+def test_job_found_via_registry_job_id_when_worker_sid_evolved():
+    """fork 作业的 worker 每次 fork-resume 都换新 session id,而作业 state.json
+    里的 session_id 停在创建时那一个(2026-08-25 实测:作业 9877837f 记着
+    9877837f-…,活着的 worker 已是 ed2bd59a-…)。注册表条目的 jobId 才是权威
+    链接:按它也必须查得到作业,否则 worker 算不出 attach、组的 attach_job_id
+    是空 —— 顶栏格子点了没反应(用户实报:「Goal达到了吗」点不了)。"""
+    worker = sess("ed2bd59a", kind="bg", has_terminal=False, job_id="9877837f")
+    jobs = [{"job_id": "9877837f", "session_id": "9877837f-3296", "state": "stopped"}]
+    g = build_groups([worker], jobs=jobs)[0]
+    assert g["has_window"] is False
+    assert g["attach_job_id"] == "9877837f"
+    assert g["members"][0]["action"] == "attach"
+
+
+def test_blocked_job_maps_to_waiting_via_registry_job_id():
+    """状态映射同样要走 jobId 链接:worker 的 session id 演化之后,它的作业
+    blocked 也得亮红灯,不能因为查不到作业就绿灯装没事。"""
+    worker = sess("w-live", kind="bg", has_terminal=False, job_id="j1", status="idle")
+    jobs = [{"job_id": "j1", "session_id": "w-created", "tempo": "blocked"}]
+    g = build_groups([worker], jobs=jobs)[0]
+    assert g["status"] == "waiting"
+
+
+def test_registry_job_link_does_not_override_direct_session_match():
+    """session_id 直接对得上的作业不受影响:jobId 补挂只填空,不覆盖。"""
+    a = sess("a", kind="bg", has_terminal=False, job_id="ja")
+    jobs = [
+        {"job_id": "ja", "session_id": "a", "tempo": "blocked"},
+        {"job_id": "jb", "session_id": "b-gone", "tempo": "active"},
+    ]
+    g = build_groups([a], jobs=jobs)[0]
+    assert g["status"] == "waiting"
+    assert g["attach_job_id"] == "ja"

@@ -36,6 +36,13 @@
   .cell.bg { border-style: dashed; opacity: 0.7; cursor: default; }
   .cell.waiting { border-color: rgba(217, 112, 96, 0.8); color: #f4ddd8; animation: breathe 1.6s ease-in-out infinite; }
   @keyframes breathe { 50% { box-shadow: 0 0 12px rgba(217, 112, 96, 0.5); } }
+  /* 点击被拒(后端 404/409 或格子无处可去):短促红闪。顶栏没地方放文字
+     错误,至少让"点了但没去成"可感知,别装死。详情看 deck 页的提示。 */
+  .cell.deny { animation: deny 0.5s ease; }
+  @keyframes deny {
+    0%, 100% { border-color: rgba(160, 180, 210, 0.14); }
+    30% { border-color: #d97060; box-shadow: 0 0 10px rgba(217, 112, 96, 0.8); }
+  }
   .dot { width: 7px; height: 7px; border-radius: 50%; flex: none; }
   .dot.busy { background: #e2a13c; box-shadow: 0 0 7px rgba(226, 161, 60, 0.8); }
   .dot.waiting { background: #d97060; box-shadow: 0 0 7px rgba(217, 112, 96, 0.9); }
@@ -451,15 +458,26 @@ setInterval(() => window.pywebview?.api?.set_rows?.(S.rows || 1), 2000);
 window.addEventListener("pywebviewready", () => { lastSig = ""; tick(); });
 
 const post = (url) => fetch(url, { method: "POST",
-  headers: { "Content-Type": "application/json" }, body: "{}" });
+  headers: { "Content-Type": "application/json" }, body: "{}" })
+  .then((r) => { if (!r.ok) throw new Error(String(r.status)); });
+
+// 失败反馈:短促红闪(动画类先摘再挂,连点也能重新触发)
+const deny = (cell) => {
+  cell.classList.remove("deny");
+  void cell.offsetWidth;
+  cell.classList.add("deny");
+};
 
 // 点击 = 「带我过去」:有窗口就激活窗口,没窗口的游离作业开新终端 attach 接管。
 // 旧实现按 kind=="bg" 一律不可点,但 fork 出的会话正是 bg 却有真实窗口。
+// 哪条路都走不通(无窗口且无作业)或后端拒绝,红闪示意,不再静默装死
+// (用户实报:格子点了没反应,分不清是没点上还是去不成)。
 document.addEventListener("click", (e) => {
   const cell = e.target.closest(".cell");
   if (!cell) return;
-  if (cell.dataset.window === "1") post(`/api/live/${cell.dataset.sid}/focus`);
-  else if (cell.dataset.job) post(`/api/jobs/${cell.dataset.job}/attach`);
+  if (cell.dataset.window === "1") post(`/api/live/${cell.dataset.sid}/focus`).catch(() => deny(cell));
+  else if (cell.dataset.job) post(`/api/jobs/${cell.dataset.job}/attach`).catch(() => deny(cell));
+  else deny(cell);
 });
 $("brand").addEventListener("click", () => window.pywebview?.api?.open_deck());
 
@@ -487,8 +505,9 @@ function treePayload(g) {
       status: m.status,
       cwd: m.cwd || "",
       label: m.tag || m.title || m.name || (m.session_id || "").slice(0, 8),
-      // 有窗口的成员点了是跳转;纯后台作业点了是 attach 接管
-      attachable_window: g.has_window,
+      // 后端算好的动作(focus/resume/attach)必须转发 —— 之前漏了这个字段,
+      // 树端拿不到就全部退化成 focus,「恢复/接管」从来没生效过
+      action: m.action || "",
     })),
   };
 }

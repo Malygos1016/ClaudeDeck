@@ -125,6 +125,29 @@ def _job_index(jobs: Iterable[dict]) -> dict[str, dict]:
     return {j["session_id"]: j for j in jobs if j.get("session_id")}
 
 
+def _reconcile_job_links(live: list[dict], jobs: list[dict], by_job: dict[str, dict]) -> None:
+    """用会话注册表的 jobId 修正作业索引。
+
+    fork 作业的 worker 会话每次 fork-resume 都换新 session id,而作业 state.json
+    里的 session_id 停在创建时那一个(2026-08-25 实测:作业 9877837f 记着
+    9877837f-…,活着的 worker 已是 ed2bd59a-…)。注册表条目的 jobId 才是权威
+    链接 —— 按它把作业补挂到 worker 当前的 session id 下。不修的话该 worker
+    查不到自己的作业:blocked/needs 映射不成 waiting、动作算不出 attach、
+    组的 attach_job_id 是空(用户实报:格子点了没反应)。
+    """
+    by_jid = {j.get("job_id"): j for j in jobs if j.get("job_id")}
+    for s in live:
+        sid = s.get("session_id")
+        job = by_jid.get(s.get("job_id") or "")
+        if job is None or sid in by_job:
+            continue
+        # 同一个 dict 挂两个键即可:_mark_window_ownership 遍历 values 时
+        # 重复见到它是幂等的;把 session_id 字段一并改正,fork 归属检查
+        # (j.session_id in live_sids)才认得这个还活着的 worker。
+        job["session_id"] = sid
+        by_job[sid] = job
+
+
 def _job_wants_attention(job: dict | None) -> bool:
     """作业是否在等用户。blocked 与 needs 都算,两者 CC 会各用一个。"""
     if not job:
@@ -159,6 +182,7 @@ def build_groups(sessions: list[dict], jobs: list[dict]) -> list[dict]:
         s for s in sessions
         if not s.get("spare") and s.get("entrypoint", "cli") != "sdk-cli"
     ]
+    _reconcile_job_links(live, jobs, by_job)
     _mark_window_ownership(live, by_job)
     live = _dedup_by_session(live)
     by_sid = {s.get("session_id"): s for s in live}
