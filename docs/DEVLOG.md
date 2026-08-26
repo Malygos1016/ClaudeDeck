@@ -279,6 +279,12 @@ uRedPulse,uSq,uSqB0,uSqB1。JS 帧循环上传,全在 topbar.html。
 - 真机验收:锁题 CofeChat 0.75s(subtract 正确选中)/ 提权 ClaudeDeck开发
   0.18s(窗口置前,单标签即完成;跨完整性 SetForegroundWindow 实证生效)/
   常规 0.82s(窗内标题命中)。零报错。
+- 压测(两轮 ×26 请求:同格 8 连击 / 四路并发 ×2 / 提权锁题常规混合交替 10):
+  52/52 成功零失败,单次中位 0.72~0.74s;并发 p90 ~2.4s 是 FOCUS_LOCK 排队
+  (UIA/控制台是全局资源,串行是正确性要求;真实使用是单击,无此长尾)。
+  tier 分布与设计一致(title 17/subtract 5/window-only 4 每轮)。句柄
+  372→压后 395→静置回落 381(+9 为一次性暖机,GC 有回收,无单调增长,
+  无泄漏);压后 healthz ok、groups 完整。
 - 保留的领域事实:管理员前缀白名单、spinner 抢写、锁题停转发、DoDefaultAction
   ~0.5s 是标签切换的地板(Select 要 2.5s)。第三方终端(宿主非 WT 的
   OpenConsole)仍如实报"没有可聚焦窗口"。
