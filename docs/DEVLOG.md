@@ -253,6 +253,41 @@ uRedPulse,uSq,uSqB0,uSqB1。JS 帧循环上传,全在 topbar.html。
 - OpenConsole 命令行只有 WT 进程内句柄(`--signal 0x1d38`),外部解引用不了,
   所以"宿主→具体标签"只能靠标记法,没有纯只读通路。
 
+**2026-08-25 二轮:第 2.5 层「排除法」+ 僵尸残留治理**(用户否决"指导手动解锁",
+要求点击必跳;设计经独立对抗性审查后落地):
+
+- **排除法(app/focus.py: _deduce_unowned + focus_by_elimination)**:锁题标签对
+  标记法免疫,但其他每个活会话都能按名字认领自己的标签 —— 全部认领后唯一无主
+  的,演绎上必属目标。这不是猜:三前提逐条机器查验(目标确在 WT 标签/闭世界
+  计数/单射认领),任一不成立→诚实失败并附无主名单。要点:
+  - **计数单位是控制台宿主(OpenConsole pid),不是会话**:fork 就地共窗等多会话
+    一宿主场景按宿主去重(consolemark.wt_host_of),口径才与标签对得上;
+  - **0 标签的 WT 窗口两边剔除**:WT 窗口必有 ≥1 标签,枚举出 0 = UIA 读不到
+    (设防提权 WT;2026-08-25 实测本机普通权限反而读得到——runas 0x20000 +
+    IsUserAnAdmin=false 下提权窗口标签照常枚举,故此路径为环境差异的休眠保护);
+  - **排除阶段强制 fresh 全量扫描**,正确性要求:缓存少一个新开标签会把无主
+    集合从 2 缩成 1,制造假唯一→选错;
+  - 触发条件=两种 wt-tab 失败:reason="marker-suppressed"(锁题)与
+    "attach-failed"(如目标 CC 提权而服务普通权限);全 headless 绝不触发;
+  - **否决加速 memo**(跨请求状态换 2.5s 不值,锁题是个别异常态);锁题格子
+    每次点击老实走全程 ~5s;
+  - **已知不可拦残余 B8**:目标锁死文字恰好等于另一会话 X 的候选名、且 X 自己
+    的标签恰好同刻失配 → 会跳到 X 的标签。概率极低、后果一眼可见,以
+    tier="elimination"+verified=False 如实标注,接受。
+  - spare 空壳的宿主归属待实测(出现时 probe 记录);宿主去重两种结果都兜住。
+
+- **僵尸残留治理**:作业已终态(stopped/done/failed)而 worker 进程仍活 =
+  残留(实证:作业 9877837f state=stopped、worker+pty-host 挂 19h、心跳冻结;
+  attach 对终态作业是重启尝试,撞残留即 "can't start — exit 1 before init",
+  作业被 CC 改判 failed)。处置(用户拍板):
+  - grouping 标 residual=True,**顶栏隐藏**(摄入口过滤,shader 计数同口径);
+    deck 看板页仍可见;"在等你的必须看得见"戒律不变 —— running/blocked 绝不算残留;
+  - attach 对终态作业 409 拒绝;成员动作降为 resume(继续对话的正路);
+  - stop 端点升级清理链:官方 `claude stop` → 复查注册表 jobId 对应 worker
+    (pid+procStart 验活)→ 仍活强杀,父进程仅当 cmdline 含 --bg-pty-host 与
+    本 job id 才连带(三重身份校验,宁可漏杀不可错杀);看板页作业行挂
+    「清理残留」按钮。transcript 永远不动。
+
 **2026-08-25 补丁(用户实报两个格子点了没反应,排查出四件事)**:
 - **WT 手动重命名会锁题,标记法对锁死的标签无解**:实证是标签定格在旧
   ai-title(`设计非代码能力培养平台架构`)而控制台内部标题早已换新

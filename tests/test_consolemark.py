@@ -22,7 +22,7 @@ import sys
 import pytest
 
 from app import consolemark
-from app.consolemark import _helper_main, console_host_of, host_kind, marker_for
+from app.consolemark import _helper_main, console_host_of, host_kind, marker_for, wt_host_of
 
 # ---------- marker_for ----------
 
@@ -71,6 +71,15 @@ def test_host_kind_self_pid_shape():
     assert isinstance(kind, str)
     assert isinstance(hwnd, int)
     assert kind in {"wt-tab", "own-window", "headless"}
+
+
+def test_wt_host_of_shape():
+    """排除法的宿主查询:只验不抛、形状对(None 或 (宿主pid, WT pid) 二元组);
+    具体归属由运行环境的终端形态决定,断言死了就是在测环境。"""
+    r = wt_host_of(os.getpid())
+    assert r is None or (
+        isinstance(r, tuple) and len(r) == 2 and all(isinstance(x, int) for x in r)
+    )
 
 
 # ---------- mark_console / restore_console:base64 协议(monkeypatch,零真实 attach) ----------

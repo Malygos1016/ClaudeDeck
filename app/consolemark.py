@@ -79,6 +79,36 @@ def _visible_window_of(owner_pid: int) -> int:
     return hits[0] if hits else 0
 
 
+def _wt_parent_of(host_pid: int) -> int | None:
+    """host_pid 若是 WindowsTerminal 的 OpenConsole,返回 WT 进程 pid;否则 None。"""
+    try:
+        import psutil
+
+        p = psutil.Process(host_pid)
+        if (p.name() or "").lower() != "openconsole.exe":
+            return None
+        parent = p.parent()
+        if parent and (parent.name() or "").lower() == "windowsterminal.exe":
+            return parent.pid
+    except Exception:
+        return None
+    return None
+
+
+def wt_host_of(pid: int) -> tuple[int, int] | None:
+    """pid 的控制台宿主若是 WT 的 OpenConsole → (宿主 pid, WT 进程 pid);否则 None。
+
+    排除法的计数单位:多个会话可能共享同一个宿主(fork 就地共窗),按宿主
+    去重才是"一个标签一个单元"的正确口径。WT 进程 pid 用于提权窗口剔除
+    (提权 WT 是独立进程,见 focus.focus_by_elimination)。
+    """
+    host = console_host_of(pid)
+    if not host:
+        return None
+    wt = _wt_parent_of(host)
+    return (host, wt) if wt else None
+
+
 def host_kind(pid: int) -> tuple[str, int]:
     """判定会话的窗口形态。返回 (kind, hwnd):
 
@@ -89,16 +119,7 @@ def host_kind(pid: int) -> tuple[str, int]:
     host = console_host_of(pid)
     if not host:
         return "headless", 0
-    try:
-        import psutil
-
-        p = psutil.Process(host)
-        pname = (p.name() or "").lower()
-        parent = p.parent()
-        parent_name = (parent.name() or "").lower() if parent else ""
-    except Exception:
-        return "headless", 0
-    if pname == "openconsole.exe" and parent_name == "windowsterminal.exe":
+    if _wt_parent_of(host):
         return "wt-tab", 0
     hwnd = _visible_window_of(host)
     if hwnd:

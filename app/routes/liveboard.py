@@ -7,7 +7,7 @@ import subprocess
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 from ..focus import focus_group
-from ..grouping import build_groups
+from ..grouping import TERMINAL_JOB_STATES, build_groups
 from ..launcher import launch_attach
 from ..live import read_jobs, read_live_sessions
 from ..quota import quota_report
@@ -51,14 +51,20 @@ def focus_live_session(
     新进程优先 —— fork 后 resume 出的那个),再组里其他成员。
     """
     cfg = request.app.state.cfg
-    group = _find_group(cfg, con, sid)
+    sessions = _hydrate(cfg, con)
+    groups = build_groups(sessions, read_jobs(cfg)["jobs"])
+    want = sid.lower()
+    group = next(
+        (g for g in groups
+         if any((m.get("session_id") or "").lower() == want for m in g["members"])),
+        None,
+    )
     if group is None:
         raise HTTPException(404, "该会话不在运行中。")
     if not group["has_window"]:
         raise HTTPException(
             409, "这是没有窗口的后台作业,用「接管」在新终端里打开它。"
         )
-    want = sid.lower()
     # 主序:点谁先试谁。次序:其余成员新进程优先 —— 纯防御,build_groups 里
     # _dedup_by_session 已把同 sid 去重到一条,这里通常只是稳定排序的兜底。
     members = sorted(
@@ -68,25 +74,37 @@ def focus_live_session(
             -_started_epoch_s(m),
         ),
     )
-    # 编排全在 focus_group(专用 UIA 线程):快路径标题匹配(缓存热时亚秒,
-    # 唯一命中直接用)→ 零命中/歧义升级到标记法(零歧义精确定位)→ 全败时
-    # 沿用快路径的失败原因 —— 歧义名单比笼统的"没找到"有用。
-    res = focus_group([m.get("pid") for m in members], _name_candidates(group))
+    # roster = 全量注册表会话(含 spare/sdk-cli):排除法的闭世界计数要数
+    # "每一个占着 WT 标签的控制台",预过滤会把计数弄错(见 focus_by_elimination)。
+    roster = [{"pid": s.get("pid"), "names": _session_names(s)} for s in sessions]
+    # 编排全在 focus_group(专用 UIA 线程):快路径标题匹配 → 标记法(零歧义
+    # 定位)→ 排除法(锁题标签的演绎定位)→ 携诊断的失败。
+    res = focus_group([m.get("pid") for m in members], _name_candidates(group), roster)
     if res["ok"]:
         return res
+    extra = ""
+    if res.get("unaccounted"):
+        extra = ("排除法也未能唯一定位:" + " / ".join(map(str, res["unaccounted"]))
+                 + ";关掉多余的非 CC 终端标签后重试也可。")
+    reason = res.get("reason")
+    if reason == "marker-suppressed":
+        # 标记写进控制台了却没上标签:WT 对该标签停止了应用标题转发(手动
+        # 重命名锁题)。排除法也没兜住时,指路解锁而不是装作没找到。
+        hint = (res.get("console_title") or "").strip()
+        raise HTTPException(
+            409, "找到了该会话的终端,但它的标签被手动重命名锁定,标记与标题"
+                 "都定位不到。解锁:在 WT 里双击那个标签,清空名字后回车,"
+                 "恢复自动标题即可一键跳转。"
+                 + (f"(该会话想显示的标题是「{hint}」)" if hint else "") + extra
+        )
+    if reason == "attach-failed":
+        raise HTTPException(
+            409, "该会话的终端以管理员权限运行,普通权限的本服务无法附加其"
+                 "控制台做标记定位。" + (extra or "可手动切换到那个管理员窗口。")
+        )
     if res.get("ambiguous"):
         raise HTTPException(
             409, "多个终端标签同名,无法确定该跳哪个: " + " / ".join(res["ambiguous"])
-        )
-    if res.get("marker_suppressed"):
-        # 会话找到了、标记也写进控制台了,是 WT 标签不显示应用标题(手动
-        # 重命名会锁题)。指路解锁而不是装作没找到。
-        hint = (res.get("console_title") or "").strip()
-        raise HTTPException(
-            409, "找到了该会话的终端,但它的标签被手动重命名锁定,程序改不动"
-                 "标题、也就定位不到具体标签。解锁:在 WT 里双击那个标签,"
-                 "清空名字后回车,恢复自动标题即可一键跳转。"
-                 + (f"(该会话想显示的标题是「{hint}」)" if hint else "")
         )
     raise HTTPException(
         404, "没找到该会话的终端窗口(可能已关闭,或跑在第三方终端里);"
@@ -119,22 +137,22 @@ def _hydrate(cfg, con) -> list[dict]:
     return data["sessions"]
 
 
-def _find_group(cfg, con, sid: str) -> dict | None:
-    groups = build_groups(_hydrate(cfg, con), read_jobs(cfg)["jobs"])
-    want = sid.lower()
-    for g in groups:
-        if any((m.get("session_id") or "").lower() == want for m in g["members"]):
-            return g
-    return None
+def _session_names(s: dict) -> list[str]:
+    """单个会话的名字变体(tag/title/name 非空去重)。窗口标题可能是其中任意一个。"""
+    out: list[str] = []
+    for key in ("tag", "title", "name"):
+        v = (s.get(key) or "").strip()
+        if v and v not in out:
+            out.append(v)
+    return out
 
 
 def _name_candidates(group: dict) -> list[str]:
-    """全组的名字变体。窗口标题可能是其中任意一个。"""
+    """全组的名字变体,规则与 _session_names 同一份。"""
     out: list[str] = []
     for m in group["members"]:
-        for key in ("tag", "title", "name"):
-            v = (m.get(key) or "").strip()
-            if v and v not in out:
+        for v in _session_names(m):
+            if v not in out:
                 out.append(v)
     return out
 
@@ -146,7 +164,12 @@ def jobs(request: Request):
 
 @router.post("/jobs/{job_id}/attach")
 def attach_job(job_id: str, request: Request):
-    """在新终端标签里接管一个没有窗口的后台作业(claude attach)。"""
+    """在新终端标签里接管一个没有窗口的后台作业(claude attach)。
+
+    只对还在运行的作业开放:attach 对已终态的作业是"重启尝试",若有残留
+    进程占着会话/管道,重生实例启动即死(2026-08-25 实报:对 state=stopped
+    的作业 attach 弹出 "can't start — exit 1 before init",作业被改判 failed)。
+    """
     cfg = request.app.state.cfg
     job = next(
         (j for j in read_jobs(cfg)["jobs"] if j.get("job_id") == job_id),
@@ -154,6 +177,12 @@ def attach_job(job_id: str, request: Request):
     )
     if job is None:
         raise HTTPException(404, "没有这个后台作业。")
+    if (job.get("state") or "") in TERMINAL_JOB_STATES:
+        raise HTTPException(
+            409, f"该作业已结束(state={job.get('state')}),接管等于重启,"
+                 "不在这里做。要继续这段对话请在会话页 resume;"
+                 "有进程残留就用「清理」。"
+        )
     return launch_attach(cfg, job.get("cwd"), job_id)
 
 
@@ -176,11 +205,69 @@ def stop_job(job_id: str, request: Request):
         [cfg.claude_exe, "stop", job_id],
         capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30,
     )
-    if proc.returncode != 0:
+    # 官方停完复查:僵尸残留(作业已终态、worker 进程仍活)官方 stop 不会
+    # 处理 —— 它眼里作业早停了。仍有活 worker 就升级强杀。
+    killed = _kill_job_residue(cfg, job_id)
+    if proc.returncode != 0 and not killed:
         raise HTTPException(
             500, f"claude stop 退出码 {proc.returncode}: {(proc.stderr or proc.stdout)[:500]}"
         )
-    return {"ok": True, "stopped": job_id, "stdout": (proc.stdout or "").strip()[:200]}
+    return {"ok": True, "stopped": job_id, "killed": killed,
+            "official": (proc.stdout or proc.stderr or "").strip()[:200]}
+
+
+def _kill_job_residue(cfg, job_id: str) -> list[int]:
+    """杀掉作业的残留进程(worker + 它的 --bg-pty-host 父),返回杀掉的 pid。
+
+    身份三重校验,宁可漏杀不可错杀:worker 必须是注册表里 jobId 对得上、
+    且 pid+procStart 出生时间验活通过的(read_live_sessions 已做);父进程
+    只有 cmdline 同时含 --bg-pty-host 与本 job id 才连带。transcript 不动,
+    之后随时可正常 resume。
+    """
+    import psutil
+
+    killed: list[int] = []
+    for s in read_live_sessions(cfg)["sessions"]:
+        if s.get("job_id") != job_id or not s.get("alive"):
+            continue
+        pid = s.get("pid")
+        if not isinstance(pid, int) or pid <= 0:
+            continue
+        try:
+            p = psutil.Process(pid)
+            parent = p.parent()
+        except Exception:
+            continue
+        if _terminate(p):
+            killed.append(pid)
+        try:
+            cl = " ".join(parent.cmdline() or []) if parent else ""
+        except Exception:
+            cl = ""
+        if "--bg-pty-host" in cl and job_id in cl and _terminate(parent):
+            killed.append(parent.pid)
+    return killed
+
+
+def _terminate(p) -> bool:
+    """terminate → 3s → kill → 3s;确认死亡才算数。"""
+    import psutil
+
+    try:
+        p.terminate()
+        p.wait(timeout=3)
+        return True
+    except psutil.NoSuchProcess:
+        return False
+    except psutil.TimeoutExpired:
+        try:
+            p.kill()
+            p.wait(timeout=3)
+            return True
+        except Exception:
+            return False
+    except Exception:
+        return False
 
 
 @router.get("/quota")

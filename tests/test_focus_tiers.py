@@ -184,14 +184,14 @@ def test_marker_timeout_reports_suppressed_with_console_title(monkeypatch):
     res = focus_mod.focus_session_by_pid(4321)
 
     assert res is not None and res["ok"] is False
-    assert res["marker_suppressed"] is True
+    assert res["wt_tab"] is True and res["reason"] == "marker-suppressed"
     assert res["console_title"] == "真实标题"  # strip_glyph 剥掉 ✳ 前缀
     assert restored[-1] == "✳ 真实标题"        # finally 里恢复了原题
 
 
 def test_focus_group_carries_suppressed_diagnosis_over_pid_misses(monkeypatch):
     """锁题诊断不终止尝试:组里其他成员仍要逐个试(它们可能在没锁的标签里);
-    全败时把诊断透传出去,路由靠 marker_suppressed 给出解锁指引而不是笼统 404。"""
+    全败时把诊断透传出去,路由靠 reason 给出解锁指引而不是笼统 404。"""
     fast_miss = {
         "ok": False, "matched_tab": None, "window": None,
         "tier": "title", "ambiguous": None,
@@ -200,7 +200,7 @@ def test_focus_group_carries_suppressed_diagnosis_over_pid_misses(monkeypatch):
     suppressed = {
         "ok": False, "tier": "marker", "verified": False,
         "matched_tab": None, "window": None,
-        "marker_suppressed": True, "console_title": "真实标题",
+        "wt_tab": True, "reason": "marker-suppressed", "console_title": "真实标题",
     }
     seq = {111: None, 222: suppressed, 333: None}
     calls: list[int] = []
@@ -213,7 +213,7 @@ def test_focus_group_carries_suppressed_diagnosis_over_pid_misses(monkeypatch):
 
     res = focus_mod.focus_group([111, 222, 333], ["x"])
 
-    assert res["marker_suppressed"] is True
+    assert res["reason"] == "marker-suppressed"
     assert res["console_title"] == "真实标题"
     assert calls == [111, 222, 333]  # 诊断记下后,后面的成员照样都试过
 
@@ -239,3 +239,236 @@ def test_focus_group_all_fail_returns_fast_path_with_ambiguous(monkeypatch):
     assert res == fast_ambiguous
     assert res["ambiguous"] == ["✳ 目标会话", "◑ 目标会话"]
     assert pid_calls == [111, 222]  # 两个都试过、都没戏,才回落快路径结果
+
+
+# ---------------------------------------------------------------------------
+# _deduce_unowned:排除法的演绎核心(第 2.5 层)。纯函数,零 mock。
+# 前提逐条机器查验,任一不成立就失败 —— 绝不猜。
+# ---------------------------------------------------------------------------
+
+
+def test_deduce_unique_remainder():
+    """闭世界 + 单射都成立:唯一无主的标签演绎上必属目标。"""
+    res = focus_mod._deduce_unowned(
+        ["✳ 锁死的旧标题", "✳ 会话A", "✳ 会话B"],
+        [["会话A"], ["会话B"]],
+    )
+    assert res == {"index": 0}
+
+
+def test_deduce_count_mismatch_fails():
+    """标签数 ≠ 宿主单元数(有非 CC 标签/分屏/枚举竞态):闭世界破,诚实失败。"""
+    res = focus_mod._deduce_unowned(["t1", "t2", "t3"], [["t1"]])
+    assert res["fail"] == "count"
+
+
+def test_deduce_unmatched_unit_fails():
+    """某个其他会话一个标签都没命中(它的标题刚变、索引滞后):单射破,不硬猜。"""
+    res = focus_mod._deduce_unowned(["锁死", "会话A"], [["已经改名的B"]])
+    assert res["fail"] == "injective"
+
+
+def test_deduce_ambiguous_unit_fails():
+    """某个其他会话命中两个标签(同名标签):单射破。"""
+    res = focus_mod._deduce_unowned(["同名", "同名", "锁死"], [["同名"], ["别的"]])
+    assert res["fail"] == "injective"
+
+
+def test_deduce_double_claim_fails():
+    """两个会话认领同一个标签:单射破。"""
+    res = focus_mod._deduce_unowned(["X", "锁死", "C"], [["X"], ["X"]])
+    assert res["fail"] == "injective"
+
+
+def test_deduce_swapped_claims_still_correct():
+    """互换认领(甲命中乙的标签、乙命中甲的):照样通过 —— 结论只依赖无主
+    集合,不依赖认领分配本身正确(对抗性审查 2026-08-25 论证)。"""
+    res = focus_mod._deduce_unowned(["锁死", "甲", "乙"], [["乙"], ["甲"]])
+    assert res == {"index": 0}
+
+
+# ---------------------------------------------------------------------------
+# focus_by_elimination:宿主归并 / 提权窗口两边剔除 / 唯一则选中。
+# monkeypatch 掉 wt_host_of 与 _collect_windows,演绎本身走真代码。
+# ---------------------------------------------------------------------------
+
+
+def _fake_select(picked: list):
+    def sel(w, t):
+        picked.append(t)
+        return {"ok": True, "matched_tab": t.Name, "window": w.Name}
+    return sel
+
+
+def test_elimination_unique_selects(monkeypatch):
+    tabs = [_tab("✳ 会话A"), _tab("✳ 锁死旧题"), _tab("✳ 会话B")]
+    w = _window("W")
+    monkeypatch.setattr(
+        focus_mod, "_collect_windows",
+        lambda: [{"window": w, "wt_pid": 100, "tabs": tabs}],
+    )
+    hosts = {11: (211, 100), 22: (222, 100), 33: (233, 100)}
+    monkeypatch.setattr(focus_mod, "wt_host_of", lambda pid: hosts.get(pid))
+    picked: list = []
+    monkeypatch.setattr(focus_mod, "_select_tab", _fake_select(picked))
+
+    roster = [
+        {"pid": 11, "names": ["会话A"]},
+        {"pid": 22, "names": ["会话B"]},
+        {"pid": 33, "names": ["CofeChat", "vibecoding"]},  # 目标:名字全对不上标签
+    ]
+    res = focus_mod.focus_by_elimination({33}, roster)
+
+    assert res["ok"] is True
+    assert res["tier"] == "elimination" and res["verified"] is False
+    assert picked[0].Name == "✳ 锁死旧题"
+
+
+def test_elimination_dead_window_excluded_both_sides(monkeypatch):
+    """0 标签窗口(UIA 读不到,典型提权 WT)与宿主挂它下面的单元两边剔除,
+    闭世界在可枚举宇宙内重建,演绎照常。"""
+    tabs = [_tab("✳ 会话A"), _tab("✳ 锁死旧题")]
+    monkeypatch.setattr(
+        focus_mod, "_collect_windows",
+        lambda: [
+            {"window": _window("W"), "wt_pid": 100, "tabs": tabs},
+            {"window": _window("admin"), "wt_pid": 999, "tabs": []},  # 读不到
+        ],
+    )
+    hosts = {11: (211, 100), 22: (222, 999), 33: (233, 100)}  # 22 在提权窗口里
+    monkeypatch.setattr(focus_mod, "wt_host_of", lambda pid: hosts.get(pid))
+    picked: list = []
+    monkeypatch.setattr(focus_mod, "_select_tab", _fake_select(picked))
+
+    roster = [
+        {"pid": 11, "names": ["会话A"]},
+        {"pid": 22, "names": ["管理员会话"]},
+        {"pid": 33, "names": ["目标"]},
+    ]
+    res = focus_mod.focus_by_elimination({33}, roster)
+
+    assert res["ok"] is True
+    assert res["matched_tab"] == "✳ 锁死旧题"
+
+
+def test_elimination_invisible_wt_process_excluded_both_sides(monkeypatch):
+    """提权 WT 在普通权限服务的 UIA 里**整个窗口都不出现**(2026-08-25 计划
+    任务语境实证,不是"窗口在、0 标签")——宿主挂在无任何可枚举窗口的 WT
+    进程下的单元,同样两边剔除。"""
+    tabs = [_tab("✳ 会话A"), _tab("✳ 锁死旧题")]
+    monkeypatch.setattr(
+        focus_mod, "_collect_windows",
+        lambda: [{"window": _window("W"), "wt_pid": 100, "tabs": tabs}],
+        # 注意:没有 wt_pid=999 的窗口条目 —— 它整个不可见
+    )
+    hosts = {11: (211, 100), 22: (222, 999), 33: (233, 100)}  # 22 在提权 WT 里
+    monkeypatch.setattr(focus_mod, "wt_host_of", lambda pid: hosts.get(pid))
+    picked: list = []
+    monkeypatch.setattr(focus_mod, "_select_tab", _fake_select(picked))
+
+    roster = [
+        {"pid": 11, "names": ["会话A"]},
+        {"pid": 22, "names": ["管理员会话"]},
+        {"pid": 33, "names": ["目标"]},
+    ]
+    res = focus_mod.focus_by_elimination({33}, roster)
+
+    assert res["ok"] is True
+    assert res["matched_tab"] == "✳ 锁死旧题"
+
+
+def test_elimination_target_in_invisible_window_fails_honestly(monkeypatch):
+    """目标自己在读不到的窗口里:没法演绎,如实失败,不硬猜。"""
+    monkeypatch.setattr(
+        focus_mod, "_collect_windows",
+        lambda: [{"window": _window("W"), "wt_pid": 100, "tabs": [_tab("✳ 会话A")]}],
+    )
+    hosts = {11: (211, 100), 33: (233, 999)}  # 目标 33 在不可见的 999 里
+    monkeypatch.setattr(focus_mod, "wt_host_of", lambda pid: hosts.get(pid))
+
+    res = focus_mod.focus_by_elimination(
+        {33}, [{"pid": 11, "names": ["会话A"]}, {"pid": 33, "names": ["目标"]}]
+    )
+
+    assert res["ok"] is False
+    assert res["elimination_fail"] == "target-window-unreadable"
+
+
+def test_elimination_shared_host_units_merge(monkeypatch):
+    """fork 就地共窗:两个会话同一宿主 → 合并成一个单元,计数口径才与标签
+    对得上(对抗性审查修正 1:计数单位是宿主,不是会话)。"""
+    tabs = [_tab("✳ 父标题"), _tab("✳ 锁死旧题")]
+    monkeypatch.setattr(
+        focus_mod, "_collect_windows",
+        lambda: [{"window": _window("W"), "wt_pid": 100, "tabs": tabs}],
+    )
+    hosts = {11: (211, 100), 12: (211, 100), 33: (233, 100)}  # 11/12 共宿主 211
+    monkeypatch.setattr(focus_mod, "wt_host_of", lambda pid: hosts.get(pid))
+    picked: list = []
+    monkeypatch.setattr(focus_mod, "_select_tab", _fake_select(picked))
+
+    roster = [
+        {"pid": 11, "names": ["父标题"]},
+        {"pid": 12, "names": ["子分支名"]},
+        {"pid": 33, "names": ["目标"]},
+    ]
+    res = focus_mod.focus_by_elimination({33}, roster)
+
+    assert res["ok"] is True
+    assert res["matched_tab"] == "✳ 锁死旧题"
+
+
+# ---------------------------------------------------------------------------
+# focus_group 编排:wt-tab 失败证据触发排除法;全 headless 绝不触发。
+# ---------------------------------------------------------------------------
+
+
+def test_focus_group_evidence_triggers_elimination(monkeypatch):
+    fast_miss = {
+        "ok": False, "matched_tab": None, "window": None,
+        "tier": "title", "ambiguous": None,
+    }
+    monkeypatch.setattr(focus_mod, "focus_by_title", lambda candidates: fast_miss)
+    suppressed = {
+        "ok": False, "tier": "marker", "verified": False,
+        "matched_tab": None, "window": None,
+        "wt_tab": True, "reason": "marker-suppressed", "console_title": "t",
+    }
+    monkeypatch.setattr(focus_mod, "focus_session_by_pid", lambda pid: suppressed)
+    elim_hit = {
+        "ok": True, "tier": "elimination", "verified": False,
+        "matched_tab": "✳ 锁死旧题", "window": "W", "ambiguous": None,
+    }
+    elim_calls: list = []
+
+    def fake_elim(pids, roster):
+        elim_calls.append((pids, roster))
+        return elim_hit
+
+    monkeypatch.setattr(focus_mod, "focus_by_elimination", fake_elim)
+
+    roster = [{"pid": 42, "names": ["目标"]}]
+    res = focus_mod.focus_group([42], ["目标"], roster=roster)
+
+    assert res == elim_hit
+    assert elim_calls and elim_calls[0][0] == {42}
+
+
+def test_focus_group_headless_only_never_runs_elimination(monkeypatch):
+    """没有任何 wt-tab 证据(全 headless)时排除法不该被碰 —— 它的前提 1
+    (目标确在某标签里)都不成立,跑了就是猜。"""
+    fast_miss = {
+        "ok": False, "matched_tab": None, "window": None,
+        "tier": "title", "ambiguous": None,
+    }
+    monkeypatch.setattr(focus_mod, "focus_by_title", lambda candidates: fast_miss)
+    monkeypatch.setattr(focus_mod, "focus_session_by_pid", lambda pid: None)
+
+    def boom(*a):
+        raise AssertionError("排除法不该被调用")
+
+    monkeypatch.setattr(focus_mod, "focus_by_elimination", boom)
+
+    res = focus_mod.focus_group([42], ["目标"], roster=[{"pid": 42, "names": ["目标"]}])
+
+    assert res["ok"] is False and res["tier"] == "title"

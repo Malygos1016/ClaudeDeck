@@ -189,5 +189,91 @@ def test_stop_job(cfg, monkeypatch):
     with TestClient(app) as c:
         r = c.post("/api/jobs/abc12345/stop")
         assert r.status_code == 200 and r.json()["ok"] is True
+        assert r.json()["killed"] == []  # 注册表里没有活 worker,无残留可杀
         assert calls[0][1:] == ["stop", "abc12345"]  # 只传白名单里的 id
         assert c.post("/api/jobs/nope/stop").status_code == 404
+
+
+def test_attach_rejected_for_terminal_job(cfg):
+    """终态作业不给 attach:那等于重启尝试,撞上残留进程启动即死
+    (2026-08-25 实报 "can't start — exit 1 before init",作业被改判 failed)。"""
+    import json as _json
+
+    jd = cfg.claude_home_path / "jobs" / "fa11ed01"
+    jd.mkdir(parents=True)
+    (jd / "state.json").write_text(
+        _json.dumps({"name": "g", "state": "failed", "sessionId": "s"}), encoding="utf-8"
+    )
+    app = create_app(cfg)
+    with TestClient(app) as c:
+        r = c.post("/api/jobs/fa11ed01/attach")
+        assert r.status_code == 409
+        assert "重启" in r.json()["detail"]
+
+
+def test_stop_escalates_to_kill_when_residue_lingers(cfg, monkeypatch):
+    """僵尸残留(作业终态、worker 进程仍活):官方 stop 不会处理 —— 它眼里
+    作业早停了 —— 所以停完复查、升级强杀。父进程只有 cmdline 同时含
+    --bg-pty-host 与本 job id 才连带(三重身份校验,宁可漏杀不可错杀)。"""
+    import json as _json
+
+    import psutil as _psutil
+
+    from app.routes import liveboard
+
+    jd = cfg.claude_home_path / "jobs" / "dead1234"
+    jd.mkdir(parents=True)
+    (jd / "state.json").write_text(
+        _json.dumps({"name": "z", "state": "stopped", "sessionId": "s"}), encoding="utf-8"
+    )
+
+    class _P:
+        returncode = 0
+        stdout = "already stopped"
+        stderr = ""
+
+    monkeypatch.setattr(liveboard.subprocess, "run", lambda *a, **k: _P)
+    monkeypatch.setattr(
+        liveboard, "read_live_sessions",
+        lambda cfg, **k: {"sessions": [
+            {"pid": 4001, "job_id": "dead1234", "alive": True},
+            {"pid": 4002, "job_id": "other", "alive": True},  # 别的作业,不许碰
+        ]},
+    )
+
+    acted: list = []
+
+    class FakeProc:
+        def __init__(self, pid, cmdline_parts, parent=None):
+            self.pid = pid
+            self._cl = cmdline_parts
+            self._parent = parent
+
+        def parent(self):
+            return self._parent
+
+        def cmdline(self):
+            return self._cl
+
+        def terminate(self):
+            acted.append(("term", self.pid))
+
+        def wait(self, timeout=None):
+            return 0
+
+        def kill(self):
+            acted.append(("kill", self.pid))
+
+    host = FakeProc(
+        3999,
+        ["claude.exe", "--bg-pty-host", r"\\.\pipe\cc-daemon-x-pty-dead1234", "210", "53"],
+    )
+    worker = FakeProc(4001, ["claude.exe"], parent=host)
+    monkeypatch.setattr(_psutil, "Process", lambda pid: {4001: worker}[pid])
+
+    app = create_app(cfg)
+    with TestClient(app) as c:
+        r = c.post("/api/jobs/dead1234/stop")
+        assert r.status_code == 200
+        assert r.json()["killed"] == [4001, 3999]  # worker 在前,pty-host 连带
+        assert ("term", 4001) in acted and ("term", 3999) in acted

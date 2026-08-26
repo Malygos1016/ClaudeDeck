@@ -421,11 +421,39 @@ def test_job_found_via_registry_job_id_when_worker_sid_evolved():
     链接:按它也必须查得到作业,否则 worker 算不出 attach、组的 attach_job_id
     是空 —— 顶栏格子点了没反应(用户实报:「Goal达到了吗」点不了)。"""
     worker = sess("ed2bd59a", kind="bg", has_terminal=False, job_id="9877837f")
-    jobs = [{"job_id": "9877837f", "session_id": "9877837f-3296", "state": "stopped"}]
+    jobs = [{"job_id": "9877837f", "session_id": "9877837f-3296", "state": "working"}]
     g = build_groups([worker], jobs=jobs)[0]
     assert g["has_window"] is False
+    assert g["residual"] is False
     assert g["attach_job_id"] == "9877837f"
     assert g["members"][0]["action"] == "attach"
+
+
+def test_terminal_job_group_is_residual_not_attachable():
+    """僵尸残留:无窗口 + 作业已终态(进程却还活着,否则注册表早剔除)。
+    顶栏据 residual 隐藏(2026-08-25 用户拍板);attach 不再提供 —— 对终态
+    作业 attach 等于重启,撞上残留进程启动即死(实报 exit 1 before init);
+    动作给 resume,那才是"继续这段对话"的正路。"""
+    worker = sess("w1", kind="bg", has_terminal=False, job_id="j1")
+    jobs = [{"job_id": "j1", "session_id": "w1-old", "state": "stopped"}]
+    g = build_groups([worker], jobs=jobs)[0]
+    assert g["residual"] is True
+    assert g["attach_job_id"] is None
+    assert g["members"][0]["action"] == "resume"
+
+
+def test_windowed_group_is_never_residual():
+    g = build_groups([sess("a")], jobs=[])[0]
+    assert g["residual"] is False
+
+
+def test_running_bg_job_stays_visible_not_residual():
+    """还在跑/卡住的后台作业绝不算残留 ——「在等你的必须看得见」戒律。"""
+    worker = sess("w2", kind="bg", has_terminal=False, job_id="j2", status="idle")
+    jobs = [{"job_id": "j2", "session_id": "w2", "tempo": "blocked", "needs": "要授权"}]
+    g = build_groups([worker], jobs=jobs)[0]
+    assert g["residual"] is False
+    assert g["status"] == "waiting"
 
 
 def test_blocked_job_maps_to_waiting_via_registry_job_id():

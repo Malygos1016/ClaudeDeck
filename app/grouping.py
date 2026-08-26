@@ -19,6 +19,11 @@ from typing import Any, Iterable
 
 FORK_MARK = "⑂"
 
+# 作业的终态。终态作业不可 attach(那是重启尝试,撞上残留进程即死),
+# 其无窗口的残留会话也不再占顶栏格子(2026-08-25 用户拍板:顶栏隐藏,
+# deck 看板页仍可见、可清理)。
+TERMINAL_JOB_STATES = {"stopped", "done", "failed"}
+
 # 一个窗口一盏灯:取窗口内最紧急的状态。数字越小越紧急。
 STATUS_RANK = {"waiting": 0, "busy": 1, "idle": 2}
 _UNKNOWN_RANK = 3
@@ -232,10 +237,16 @@ def build_groups(sessions: list[dict], jobs: list[dict]) -> list[dict]:
             m["action"] = _member_action(m, root_sid, bool(forked), has_window, by_job)
 
         full_label = _group_label(root, members, by_job)
+        root_job = by_job.get(root_sid)
         attach_job_id = None
-        if not has_window:
-            job = by_job.get(root_sid)
-            attach_job_id = (job or {}).get("job_id")
+        if not has_window and root_job and root_job.get("state") not in TERMINAL_JOB_STATES:
+            attach_job_id = root_job.get("job_id")
+        # 僵尸残留:无窗口 + 作业已终态,但 worker 进程还活着(否则注册表条目
+        # 早被验活剔除)。它永远不会"等你",不占顶栏格子;数据保持诚实地
+        # 返回,由前端各自决定画不画(deck 看板页显示并给清理入口)。
+        residual = bool(
+            not has_window and root_job and root_job.get("state") in TERMINAL_JOB_STATES
+        )
 
         groups.append(
             {
@@ -244,6 +255,7 @@ def build_groups(sessions: list[dict], jobs: list[dict]) -> list[dict]:
                 "full_label": full_label,
                 "status": status,
                 "has_window": has_window,
+                "residual": residual,
                 "focus_session_id": (window_owner or root).get("session_id"),
                 "rename_session_id": rename_target.get("session_id"),
                 "rename_hint": _fork_suffix(display_label(rename_target)),
@@ -276,8 +288,10 @@ def _member_action(
         return "focus"
     if sid != root_sid and has_window:
         return "focus"
-    if (by_job.get(sid) or {}).get("job_id"):
+    job = by_job.get(sid)
+    if job and job.get("job_id") and job.get("state") not in TERMINAL_JOB_STATES:
         return "attach"
+    # 终态作业不给 attach(重启尝试撞残留即死);resume 才是"继续这段对话"
     return "resume"
 
 

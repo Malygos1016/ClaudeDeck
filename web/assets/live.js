@@ -1,5 +1,5 @@
 // 状态看板:运行中窗口(2s)/后台作业(10s)/用量曲线/磁盘/plans。
-import { api, copyText, esc, fmtBytes, fmtTime, fullTime, initHeader, poll, reveal } from "./common.js";
+import { api, copyText, esc, fmtBytes, fmtTime, fullTime, initHeader, poll, reveal, toast } from "./common.js";
 
 let winRevealed = false;
 let jobsRevealed = false;
@@ -35,6 +35,12 @@ function renderWindows(data) {
   $("degraded").hidden = !data.degraded;
   $("stale-count").textContent = data.stale_count;
   const list = data.sessions;
+  // 顺手维护"哪些作业还有活 worker",后台作业区据此挂「清理残留」按钮。
+  // worker 集变化时立刻重画作业区(作业区自身 10s 一轮,不然清完按钮要挂 10s)
+  const ids = new Set(list.filter((s) => s.alive && s.job_id).map((s) => s.job_id));
+  const changed = ids.size !== residueJobIds.size || [...ids].some((x) => !residueJobIds.has(x));
+  residueJobIds = ids;
+  if (changed && lastJobsData) renderJobs(lastJobsData);
   if (!list.length) {
     $("windows").innerHTML = '<div class="empty">当前没有运行中的 Claude Code 窗口。</div>';
     return;
@@ -67,7 +73,15 @@ function renderWindows(data) {
 }
 
 // ---------- 后台作业 ----------
+// 终态作业若在注册表里还挂着活 worker,就是僵尸残留(2026-08-25 实报:
+// state=stopped 却有 claude.exe 常驻,attach 重启即死)。顶栏按用户拍板
+// 直接隐藏这种格子,清理入口就在这里 —— 给这类行挂「清理残留」按钮。
+const TERMINAL_JOB_STATES = new Set(["stopped", "done", "failed"]);
+let residueJobIds = new Set();   // renderWindows 每 2s 从注册表刷新
+let lastJobsData = null;
+
 function renderJobs(data) {
+  lastJobsData = data;
   if (!data.jobs.length) {
     $("jobs").innerHTML = '<div class="empty">无后台作业。</div>';
     return;
@@ -75,11 +89,14 @@ function renderJobs(data) {
   $("jobs").innerHTML = data.jobs
     .map((j) => {
       const blocked = j.state === "blocked";
+      const residue = TERMINAL_JOB_STATES.has(j.state) && residueJobIds.has(j.job_id);
       return `
       <div class="job-card ${blocked ? "is-blocked" : ""}">
         <div class="win-top">
           <span class="mono job-state ${blocked ? "bad" : ""}">${esc(j.state || "?")}</span>
           <span class="win-name">${esc(j.name || j.id)}</span>
+          ${residue ? `<button class="ghost-btn job-clean" data-clean-job="${esc(j.job_id)}"
+            title="作业已结束但进程没退(僵尸残留)。清理=官方 stop+强杀残留进程;对话记录保留,随时可 resume">清理残留</button>` : ""}
           <span class="job-time mono" title="${esc(fullTime(j.updated_at))}">${esc(fmtTime(j.updated_at))}</span>
         </div>
         ${blocked && j.needs ? `<div class="job-needs">需要你:${esc(j.needs)}</div>` : ""}
@@ -300,6 +317,22 @@ window.addEventListener("resize", () => { if (lastCurves) drawCharts(lastCurves)
 document.addEventListener("click", (e) => {
   const el = e.target.closest("[data-copy]");
   if (el) copyText(el.dataset.copy, "已复制");
+});
+
+document.addEventListener("click", async (e) => {
+  const btn = e.target.closest("[data-clean-job]");
+  if (!btn) return;
+  btn.disabled = true;
+  try {
+    const res = await api(`/api/jobs/${btn.dataset.cleanJob}/stop`, { method: "POST" });
+    toast(res.killed?.length
+      ? `已清理:强杀残留进程 ${res.killed.join(", ")}(记录保留,可 resume)`
+      : "已停止(无残留进程)");
+    renderJobs(await api("/api/jobs", { silent: true }));
+    refreshWindows();
+  } finally {
+    btn.disabled = false;
+  }
 });
 
 loadCurves();

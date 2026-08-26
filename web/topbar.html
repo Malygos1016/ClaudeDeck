@@ -389,6 +389,10 @@ async function tick() {
   if (!groups) {
     try { groups = (await (await fetch("/api/live")).json()).groups; } catch { groups = null; }
   }
+  // 僵尸残留(作业终态、进程未退)不占顶栏格子(2026-08-25 用户拍板:
+  // 顶栏隐藏,deck 看板页仍可见、可清理)。在摄入口过滤,后面的格子渲染
+  // 与 shader 计数(nRed/nYel/total/色带几何)天然同一口径。
+  if (groups) groups = groups.filter((g) => !g.residual);
   const sig = JSON.stringify(groups);
   if (sig !== lastSig) { lastSig = sig; render(groups); }
 }
