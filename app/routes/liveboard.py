@@ -116,10 +116,17 @@ def focus_live_session(
     )
     # roster = 全量注册表会话(含 spare/sdk-cli):窗内减法要知道"这扇窗里
     # 还有谁",按 owner 通道逐个实证成员资格(见 focus._subtract_in_window)。
-    roster = [{"pid": s.get("pid"), "names": _session_names(s)} for s in sessions]
+    # 被 attach 查看器显示的守护,占窗的是查看器进程 —— 定位一律用它的 pid。
+    roster = [
+        {"pid": s.get("viewer_pid") or s.get("pid"), "names": _session_names(s)}
+        for s in sessions
+    ]
     # 窗口通道(见 app/focus.py 模块注释):会话 → WT 窗口是 OS 权威查询,
     # 窗口解析成功就必定 ok —— 最坏也是正确窗口置前 + tab_selected=False。
-    res = focus_group([m.get("pid") for m in members], _name_candidates(group), roster)
+    res = focus_group(
+        [m.get("viewer_pid") or m.get("pid") for m in members],
+        _name_candidates(group), roster,
+    )
     if res["ok"]:
         return res
     raise HTTPException(

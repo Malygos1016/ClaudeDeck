@@ -141,3 +141,28 @@ def test_jobs_blocked_first(cfg):
     assert [j["state"] for j in res["jobs"]] == ["blocked", "working"]
     assert res["jobs"][0]["needs"].startswith("V5.0")
     assert res["jobs"][0]["fork_parent_session_id"] == "s-parent"
+
+
+def test_attach_viewers_scans_cmdline(monkeypatch):
+    """attach 查看器识别:claude.exe + argv[1]=='attach' + 有终端祖先。
+    查看器不进会话注册表(2026-08-26 实测),只能按进程表扫。"""
+    from app import live as live_mod
+
+    class P:
+        def __init__(self, pid, name, cl):
+            self.pid = pid
+            self.info = {"name": name, "pid": pid}
+            self._cl = cl
+
+        def cmdline(self):
+            return self._cl
+
+    procs = [
+        P(1, "claude.exe", ["claude.exe", "attach", "abc12345"]),
+        P(2, "claude.exe", ["claude.exe", "--resume", "x"]),
+        P(3, "claude.exe", ["claude.exe", "attach", "noterm00"]),  # 无终端,不算
+        P(4, "other.exe", ["other.exe", "attach", "zzzz1111"]),
+    ]
+    monkeypatch.setattr(psutil, "process_iter", lambda attrs=None: procs)
+    monkeypatch.setattr(live_mod, "has_terminal_ancestor", lambda pid: pid == 1)
+    assert live_mod.attach_viewers() == {"abc12345": 1}

@@ -289,6 +289,26 @@ uRedPulse,uSq,uSqB0,uSqB1。JS 帧循环上传,全在 topbar.html。
   ~0.5s 是标签切换的地板(Select 要 2.5s)。第三方终端(宿主非 WT 的
   OpenConsole)仍如实报"没有可聚焦窗口"。
 
+**2026-08-26 深夜:/fork 交接机制全貌(用户假设驱动的取证,全部实证)**:
+用户在"父"窗口输入 prompt 后格子消失,顺藤摸出 fork 的完整交接链:
+1. `/fork` 先创建一个**空壳后台子会话**(新 sid,needs="send a prompt to
+   start",作业记录**不写 forkParentSessionId**);
+2. 用户在窗口里输入的下一句 prompt **进的是空壳新 sid**,不是父会话;
+3. 父的交互进程**直接退出**(注册表条目消失),窗口被原地换成
+   `claude attach <新id>` 查看器 —— 视觉无缝,实际上"父"从此只剩
+   transcript,没有任何进程。用户的直觉表述:"fork 之后不存在父进程了,
+   两个同上下文进程一起出现,旧 id 变成历史"—— 成立。
+4. **attach 查看器不进会话注册表**(进程表可见:cmdline=`attach <jobid>`,
+   父是标签里的 shell)。不扫它,一扇开着、显示活会话的窗口在 ClaudeDeck
+   眼里就不存在 → 格子被可见性规则藏掉(用户实报的"消失")。
+   对策:live.attach_viewers() 扫进程表(claude.exe + argv[1]=='attach' +
+   有终端祖先),session 带 viewer_pid;分组把"有查看器"视同"有窗且 owns",
+   聚焦/roster 一律用查看器 pid 走窗口通道(查看器的控制台 owner 正是那扇窗)。
+   真机验证:交接后的会话恢复格子,点击 window-channel/single 命中。
+5. 家族链接缺失是 CC 侧数据事实:交接产生的新 sid 与原会话的亲缘只存在于
+   transcript 的复制行里(行内 session_id=原 sid),作业记录里没有 ——
+   将来若要把交接前后串成一族,得靠索引器从 transcript 提取,不猜。
+
 **2026-08-26 /fork 默认后台 —— 窗口归属模型换代(用户真机 fork 实测)**:
 `/fork` 现在默认把子分支**直接送进后台守护,窗口留在父这边**,推翻 8/23 的
 「fork 就地发生、窗口跟子走」模型。连锁修正:窗口归属废除"按启动时刻与

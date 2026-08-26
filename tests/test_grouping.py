@@ -530,6 +530,28 @@ def test_ghost_root_keeps_attach_job_of_living_child():
     assert g["residual"] is False
 
 
+def test_attach_viewer_gives_daemon_a_window():
+    """被 `claude attach` 查看器显示的守护:自己无终端祖先,窗口却真实存在
+    (2026-08-26 实测:/fork 交接后原窗口里跑的就是查看器,而查看器不进
+    会话注册表 —— 不认它,一扇开着的活会话窗口就被当成不存在)。
+    有查看器 → 有窗、owns、动作=跳转。"""
+    d = sess("d1", kind="bg", has_terminal=False, job_id="jd", viewer_pid=3904)
+    jobs = [{"job_id": "jd", "session_id": "d1", "state": "done"}]
+    g = build_groups([d], jobs=jobs)[0]
+    assert g["has_window"] is True
+    assert g["residual"] is False
+    assert g["members"][0]["owns_window"] is True
+    assert g["members"][0]["action"] == "focus"
+
+
+def test_daemon_without_viewer_stays_windowless():
+    d = sess("d2", kind="bg", has_terminal=False, job_id="jd2")
+    jobs = [{"job_id": "jd2", "session_id": "d2", "state": "working"}]
+    g = build_groups([d], jobs=jobs)[0]
+    assert g["has_window"] is False
+    assert g["members"][0]["action"] == "attach"
+
+
 def test_ghost_root_residual_follows_living_members():
     """残留判定同理按活着成员算:幽灵父 + 终态作业的僵尸子 → 该隐藏的还是
     要隐藏,不能因为根(幽灵)没作业就当正常组放出来。"""

@@ -88,9 +88,13 @@ def _mark_window_ownership(sessions: list[dict]) -> None:
     时刻比"启发式在新行为下会把父的窗口错判给守护子(点父=另开重复窗、
     点子=跳去父窗且永远弹不出新窗,用户实报),废除;若日后再现"窗口跟子走"
     的模式,注册表条目的 sessionId 会自己切到子 sid,本判据依然成立。
+
+    viewer_pid:守护会话被 `claude attach` 查看器显示时,窗口就是查看器那扇
+    (fork 交接后窗口里跑的正是查看器,2026-08-26 实测),同样算"窗口显示的
+    是它自己"。
     """
     for s in sessions:
-        s["owns_window"] = bool(s.get("has_terminal"))
+        s["owns_window"] = bool(s.get("has_terminal") or s.get("viewer_pid"))
 
 
 def _freshness(s: dict) -> float:
@@ -237,10 +241,13 @@ def build_groups(
         # 树里父在上、子缩进在下。入参沿用活跃会话的排序(忙的在前),
         # fork 子多半是 busy,不重排就会画成父子颠倒。
         members.sort(key=lambda m: 0 if m.get("session_id") == root_sid else 1)
-        # 持有窗口的判据是「进程链上有终端祖先」,不是 kind。
-        # kind=interactive 只说明不是 --bg 起的:EdgeTracer 的脚本会话也是
-        # interactive,却挂在 python.exe 下、根本没有终端(用户实报的误判)。
-        window_owner = next((m for m in members if m.get("has_terminal")), None)
+        # 持有窗口的判据是「进程链上有终端祖先」或「有 attach 查看器盯着」,
+        # 不是 kind。kind=interactive 只说明不是 --bg 起的:EdgeTracer 的脚本
+        # 会话也是 interactive,却挂在 python.exe 下、根本没有终端(用户实报
+        # 的误判);而被 attach 显示的守护正相反 —— 自己无终端,窗口却真实存在。
+        window_owner = next(
+            (m for m in members if m.get("has_terminal") or m.get("viewer_pid")), None
+        )
         has_window = window_owner is not None
 
         statuses = [_member_status(m, by_job.get(m.get("session_id"))) for m in members]
@@ -318,7 +325,7 @@ def _member_action(
     if sid == root_sid and has_fork_child:
         # 恢复过一次之后父分支就有自己的窗口了,这时该跳过去而不是又开一个
         return "focus" if m.get("owns_window") else "resume"
-    if m.get("has_terminal"):
+    if m.get("has_terminal") or m.get("viewer_pid"):
         return "focus"
     if sid != root_sid and has_window and m.get("owns_window"):
         # 只有真正持有窗口的成员才是"跳转"。/fork 默认后台(2026-08-26 实测):

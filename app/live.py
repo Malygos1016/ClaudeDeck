@@ -89,6 +89,29 @@ def has_terminal_ancestor(pid: Any) -> bool:
     return False
 
 
+def attach_viewers() -> dict[str, int]:
+    """job_id → 正在观看它的 `claude attach <id>` 查看器 pid(带终端的才算)。
+
+    attach 查看器不在会话注册表登记(2026-08-26 实测:/fork 后在原窗口输入
+    prompt,CC 把窗口无缝换成子会话的 attach 查看器,父进程退出)——不扫它,
+    一扇开着、正在显示活会话的窗口在 ClaudeDeck 眼里就"不存在"。
+    识别:cmdline 形如 [claude.exe, "attach", <8hex>] 且有终端祖先。
+    """
+    import psutil
+
+    out: dict[str, int] = {}
+    for p in psutil.process_iter(["name", "pid"]):
+        if (p.info["name"] or "").lower() != "claude.exe":
+            continue
+        try:
+            cl = p.cmdline()
+        except Exception:
+            continue
+        if len(cl) >= 3 and cl[1] == "attach" and has_terminal_ancestor(p.pid):
+            out[cl[2]] = p.pid
+    return out
+
+
 def read_live_sessions(cfg: Config, *, include_stale: bool = False) -> dict:
     sess_dir = cfg.claude_home_path / "sessions"
     entries: list[dict] = []
@@ -108,6 +131,7 @@ def read_live_sessions(cfg: Config, *, include_stale: bool = False) -> dict:
     degraded = bool(verdicts) and not any(verdicts)
 
     now_ms = time.time() * 1000
+    viewers = attach_viewers()
     sessions: list[dict] = []
     stale_count = 0
     for e in entries:
@@ -137,6 +161,8 @@ def read_live_sessions(cfg: Config, *, include_stale: bool = False) -> dict:
                 # CC 预热的备用空壳:无对话内容,不该出现在任何界面上(2026-08-23 实测)
                 "spare": bool(d.get("spare")),
                 "job_id": d.get("jobId"),
+                # 有 attach 查看器盯着的守护会话,窗口就是查看器那扇
+                "viewer_pid": viewers.get(d.get("jobId") or ""),
                 "status": d.get("status"),
                 "status_seconds": max(0.0, (now_ms - updated) / 1000) if updated else None,
                 "started_at": ms_to_iso(started) if isinstance(started, (int, float)) else None,
