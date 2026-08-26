@@ -289,6 +289,20 @@ uRedPulse,uSq,uSqB0,uSqB1。JS 帧循环上传,全在 topbar.html。
   ~0.5s 是标签切换的地板(Select 要 2.5s)。第三方终端(宿主非 WT 的
   OpenConsole)仍如实报"没有可聚焦窗口"。
 
+**2026-08-26 defterm 边界(A 机实测,38bd36c)**:Windows「默认终端应用」设为
+WT 时,从 explorer/cmd 启动的控制台由 WT 接管显示,但**进程链上 WT 不是任何人
+的父**(宿主是 conhost,父是 cmd/explorer;WindowsTerminal 零子进程)——
+窗口通道的第一跳(宿主→WT 进程)在此环境不成立,且 conhost 窗口不可见,
+会被误判 headless。兜底:`_scan_marker_across_wt` 反向走标记法(注入唯一标记
+→ 横扫全部 WT 窗口找谁显示了它),标记走 ConPTY 标题通道、与进程归属无关。
+真 headless(fork daemon)扫不到照旧返 None。**压测注脚:8-25 的 52/52 压测
+全在"WT 自启标签"环境,恰好没覆盖 defterm —— 环境矩阵要记这条。**
+同提交:已关闭 fork 父分支在树里补**幽灵节点**(置灰/已关闭/点击 resume,
+名字从 tags/索引取叉前段;fork 关系写在作业记录里,是子会话固有属性,不随
+父进程退出消失)。审阅修复(本机):接管入口与残留判定改按「活着成员的作业」
+算 —— 幽灵成根后只看根会把无窗口 fork 组的 attach_job_id 算丢,格子点击
+两条分支都进不去(Goal 病的新形态复发);僵尸子+幽灵父的组也照常该藏就藏。
+
 - **僵尸残留治理**:作业已终态(stopped/done/failed)而 worker 进程仍活 =
   残留(实证:作业 9877837f state=stopped、worker+pty-host 挂 19h、心跳冻结;
   attach 对终态作业是重启尝试,撞残留即 "can't start — exit 1 before init",

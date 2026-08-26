@@ -285,15 +285,29 @@ def build_groups(
             m["label"] = display_label(m)
 
         full_label = _group_label(root, members, by_job)
-        root_job = by_job.get(root_sid)
+        # 接管入口与残留判定都按「活着成员的作业」算,不能只看根:根可能是
+        # 已关闭父分支的幽灵(没有进程也没有作业),只看根会把无窗口 fork 组的
+        # attach_job_id 算丢 —— 格子点击两条分支都进不去,又回到"点了没反应"
+        # (38bd36c 审阅发现的回归)。members 根在首位,顺序天然是根优先。
+        living_jobs = [
+            j for j in (
+                by_job.get(m.get("session_id"))
+                for m in members if m.get("present", True)
+            ) if j
+        ]
         attach_job_id = None
-        if not has_window and root_job and root_job.get("state") not in TERMINAL_JOB_STATES:
-            attach_job_id = root_job.get("job_id")
-        # 僵尸残留:无窗口 + 作业已终态,但 worker 进程还活着(否则注册表条目
-        # 早被验活剔除)。它永远不会"等你",不占顶栏格子;数据保持诚实地
+        if not has_window:
+            attach_job_id = next(
+                (j.get("job_id") for j in living_jobs
+                 if j.get("job_id") and j.get("state") not in TERMINAL_JOB_STATES),
+                None,
+            )
+        # 僵尸残留:无窗口 + 活着成员的作业全是终态,但进程还活着(否则注册表
+        # 条目早被验活剔除)。它永远不会"等你",不占顶栏格子;数据保持诚实地
         # 返回,由前端各自决定画不画(deck 看板页显示并给清理入口)。
         residual = bool(
-            not has_window and root_job and root_job.get("state") in TERMINAL_JOB_STATES
+            not has_window and living_jobs
+            and all(j.get("state") in TERMINAL_JOB_STATES for j in living_jobs)
         )
 
         groups.append(

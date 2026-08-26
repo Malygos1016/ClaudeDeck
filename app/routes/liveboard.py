@@ -74,10 +74,10 @@ def focus_live_session(
 ):
     """把该会话所在的终端窗口/标签拉到前台。
 
-    三层定位(见 app/focus.py 模块注释):优先按进程身份(OS 查询 + 标题标记),
-    与 CC 版本、fork、tag 全部解耦;身份链走不通才落标题匹配兜底,且多命中
-    如实报歧义。组内成员逐个尝试:先点击的 sid 自己的实例(同 sid 多实例时
-    新进程优先 —— fork 后 resume 出的那个),再组里其他成员。
+    窗口通道(见 app/focus.py 模块注释):会话 → WT 窗口是 OS 权威查询,
+    窗口解析成功就必定 ok。组内成员逐个尝试:先点击的 sid 自己的实例
+    (同 sid 多实例时新进程优先 —— fork 后 resume 出的那个),再组里其他
+    活着的成员;defterm 模式(会话与 WT 无进程关系)由 focus 层标记法兜住。
     """
     cfg = request.app.state.cfg
     sessions = _hydrate(cfg, con)
@@ -213,11 +213,13 @@ def attach_job(job_id: str, request: Request):
 
 @router.post("/jobs/{job_id}/stop")
 def stop_job(job_id: str, request: Request):
-    """停止一个后台作业(官方 `claude stop`)。
+    """停止/清理一个后台作业:官方 `claude stop` → 复查 → 残留强杀。
 
     attach 只是观看,关掉观看窗口守护进程照常活着(实测,by design)——
-    要让它真正退场只有 stop。transcript 完好保留,之后随时可正常 resume。
-    job_id 必须在当前作业列表里,顺带杜绝任意参数拼进命令行。
+    要让它真正退场只有 stop。官方 stop 对已终态作业不作为(它眼里作业早停了),
+    僵尸残留(终态+进程赖着)由 _kill_job_residue 升级处理。transcript 完好
+    保留,之后随时可正常 resume。job_id 必须在当前作业列表里,顺带杜绝任意
+    参数拼进命令行。
     """
     cfg = request.app.state.cfg
     job = next(

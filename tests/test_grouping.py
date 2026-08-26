@@ -538,3 +538,28 @@ def test_registry_job_link_does_not_override_direct_session_match():
     g = build_groups([a], jobs=jobs)[0]
     assert g["status"] == "waiting"
     assert g["attach_job_id"] == "ja"
+
+
+def test_ghost_root_keeps_attach_job_of_living_child():
+    """幽灵父成根后 attach_job_id 不能算丢:根(幽灵)没有作业,接管入口要落
+    到活着的 bg 子成员的非终态作业上 —— 否则无窗口 fork 组的格子点击两条
+    分支都进不去,又回到"点了没反应"(38bd36c 审阅发现的回归)。"""
+    child = sess("c1", kind="bg", has_terminal=False, job_id="j1")
+    jobs = [{"job_id": "j1", "session_id": "c1", "state": "working",
+             "fork_parent_session_id": "p-gone"}]
+    g = build_groups([child], jobs, absent_parents={"p-gone": {"label": "父分支"}})[0]
+    assert g["key"] == "p-gone"        # 幽灵确实成了根
+    assert g["has_window"] is False
+    assert g["attach_job_id"] == "j1"  # 接管入口落到活子的作业
+    assert g["residual"] is False
+
+
+def test_ghost_root_residual_follows_living_members():
+    """残留判定同理按活着成员算:幽灵父 + 终态作业的僵尸子 → 该隐藏的还是
+    要隐藏,不能因为根(幽灵)没作业就当正常组放出来。"""
+    child = sess("c2", kind="bg", has_terminal=False, job_id="j2")
+    jobs = [{"job_id": "j2", "session_id": "c2", "state": "failed",
+             "fork_parent_session_id": "p-gone"}]
+    g = build_groups([child], jobs, absent_parents={"p-gone": {"label": "父分支"}})[0]
+    assert g["residual"] is True
+    assert g["attach_job_id"] is None
