@@ -60,6 +60,14 @@ TERMINAL_HOSTS = {
 _ANCESTRY_MAX_DEPTH = 8
 
 
+# 祖先链判定的缓存,键 (pid, 进程创建时间)。psutil 在 Windows 上每次 parent()
+# 都做一次全量进程快照,12 个会话逐级爬链 ≈ 300ms,两个轮询端每 2s 各来一次
+# 就让服务常驻 35~50% CPU(2026-08-26 实测,顶栏掉帧的排查副产物)。进程的
+# 祖先在其生命周期内不变;创建时间进键,PID 复用给到新进程也不会撞旧值。
+_TERMINAL_CACHE: dict[tuple[int, float], bool] = {}
+_TERMINAL_CACHE_MAX = 512
+
+
 def has_terminal_ancestor(pid: Any) -> bool:
     """会话进程的祖先里有没有终端宿主。
 
@@ -72,8 +80,20 @@ def has_terminal_ancestor(pid: Any) -> bool:
         return False
     try:
         proc = psutil.Process(pid)
+        key = (pid, proc.create_time())
     except (psutil.NoSuchProcess, psutil.AccessDenied):
         return False
+    hit = _TERMINAL_CACHE.get(key)
+    if hit is not None:
+        return hit
+    if len(_TERMINAL_CACHE) >= _TERMINAL_CACHE_MAX:
+        _TERMINAL_CACHE.clear()
+    val = _walk_terminal_ancestry(proc)
+    _TERMINAL_CACHE[key] = val
+    return val
+
+
+def _walk_terminal_ancestry(proc) -> bool:
     for _ in range(_ANCESTRY_MAX_DEPTH):
         try:
             proc = proc.parent()

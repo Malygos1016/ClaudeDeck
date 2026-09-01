@@ -166,3 +166,31 @@ def test_attach_viewers_scans_cmdline(monkeypatch):
     monkeypatch.setattr(psutil, "process_iter", lambda attrs=None: procs)
     monkeypatch.setattr(live_mod, "has_terminal_ancestor", lambda pid: pid == 1)
     assert live_mod.attach_viewers() == {"abc12345": 1}
+
+
+def test_has_terminal_ancestor_is_cached_per_process_lifetime(monkeypatch):
+    """同一 (pid, 创建时间) 只爬一次祖先链;PID 复用给新进程(创建时间不同)重算。
+    每次轮询逐会话爬链 ≈300ms,是服务常驻高 CPU 的元凶(2026-08-26 实测)。"""
+    from app import live as live_mod
+
+    live_mod._TERMINAL_CACHE.clear()
+    walks: list[int] = []
+
+    class FakeProc:
+        def __init__(self, pid, ct):
+            self.pid, self._ct = pid, ct
+
+        def create_time(self):
+            return self._ct
+
+    ct = {"v": 100.0}
+    monkeypatch.setattr(psutil, "Process", lambda pid: FakeProc(pid, ct["v"]))
+    monkeypatch.setattr(
+        live_mod, "_walk_terminal_ancestry", lambda proc: (walks.append(proc.pid), True)[1]
+    )
+    assert live_mod.has_terminal_ancestor(4242) is True
+    assert live_mod.has_terminal_ancestor(4242) is True
+    assert walks == [4242]                      # 第二次命中缓存,没再爬
+    ct["v"] = 200.0                             # 同 pid 被新进程复用
+    assert live_mod.has_terminal_ancestor(4242) is True
+    assert walks == [4242, 4242]                # 创建时间变了,重算
