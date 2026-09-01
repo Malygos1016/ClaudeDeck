@@ -89,7 +89,12 @@ function renderJobs(data) {
   $("jobs").innerHTML = data.jobs
     .map((j) => {
       const blocked = j.state === "blocked";
-      const residue = TERMINAL_JOB_STATES.has(j.state) && residueJobIds.has(j.job_id);
+      // 残留 = 进程还在(注册表有活 worker)且作业"没戏":已终态,或是从没启动过
+      // 的空壳(needs="send a prompt to start")超过 60 秒 —— 与 grouping.py 的
+      // UNSTARTED_GRACE_S 同口径。
+      const unstarted = (j.needs || "") === "send a prompt to start"
+        && j.updated_at && (Date.now() - new Date(j.updated_at).getTime()) > 60_000;
+      const residue = residueJobIds.has(j.job_id) && (TERMINAL_JOB_STATES.has(j.state) || unstarted);
       return `
       <div class="job-card ${blocked ? "is-blocked" : ""}">
         <div class="win-top">

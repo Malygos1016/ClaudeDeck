@@ -393,8 +393,11 @@ async function tick() {
   // 在干活」的组 —— 全家窗口都关掉的闲置后台整组隐藏(僵尸残留天然是其
   // 子集),变 waiting/busy 自动重现,deck 看板页永远列全。在摄入口过滤,
   // 后面的格子渲染与 shader 计数(nRed/nYel/total/色带几何)天然同一口径。
+  // residual(僵尸残留 / 超时未启动的空壳)无条件不画:空壳被 CC 标成 blocked、
+  // 状态映射成 waiting,不先排除会被下面的"在等你"条件放行(2026-09-01 实报:
+  // seance 拉起的空壳顶栏亮红)。
   if (groups) groups = groups.filter(
-    (g) => g.has_window || g.status === "waiting" || g.status === "busy");
+    (g) => !g.residual && (g.has_window || g.status === "waiting" || g.status === "busy"));
   const sig = JSON.stringify(groups);
   if (sig !== lastSig) { lastSig = sig; render(groups); }
 }

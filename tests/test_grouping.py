@@ -13,6 +13,7 @@ from pathlib import Path
 
 from app.grouping import (
     STATUS_RANK,
+    _iso_to_epoch,
     build_groups,
     display_label,
     truncate_label,
@@ -528,6 +529,31 @@ def test_ghost_root_keeps_attach_job_of_living_child():
     assert g["has_window"] is False
     assert g["attach_job_id"] == "j1"  # 接管入口落到活子的作业
     assert g["residual"] is False
+
+
+def test_unstarted_shell_past_grace_is_residual():
+    """从没启动过的空壳(needs="send a prompt to start")超过 60 秒宽限期:
+    视同残留,顶栏不画、deck 页清理(2026-09-01 用户拍板;实报 seance ask 拉起
+    的两个壳在顶栏亮红——它们原地没有任何问题可答,亮红是假红灯)。"""
+    shell = sess("sh", kind="bg", has_terminal=False, job_id="js",
+                 started_at="2026-09-01T00:00:00.000Z")
+    jobs = [{"job_id": "js", "session_id": "sh", "state": "working",
+             "tempo": "blocked", "needs": "send a prompt to start"}]
+    now = _iso_to_epoch("2026-09-01T00:00:00.000Z") + 120  # 壳已 120 秒
+    g = build_groups([shell], jobs=jobs, now=now)[0]
+    assert g["residual"] is True
+
+
+def test_unstarted_shell_within_grace_stays_visible_and_waiting():
+    """宽限期内(如 /fork 交接那几十秒)照常显示为等待:壳正等你在父窗口敲下一句。"""
+    shell = sess("sh", kind="bg", has_terminal=False, job_id="js",
+                 started_at="2026-09-01T00:00:00.000Z")
+    jobs = [{"job_id": "js", "session_id": "sh", "state": "working",
+             "tempo": "blocked", "needs": "send a prompt to start"}]
+    now = _iso_to_epoch("2026-09-01T00:00:00.000Z") + 20  # 壳才 20 秒
+    g = build_groups([shell], jobs=jobs, now=now)[0]
+    assert g["residual"] is False
+    assert g["status"] == "waiting"
 
 
 def test_attach_viewer_gives_daemon_a_window():

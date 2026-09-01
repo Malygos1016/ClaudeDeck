@@ -289,6 +289,18 @@ uRedPulse,uSq,uSqB0,uSqB1。JS 帧循环上传,全在 topbar.html。
   ~0.5s 是标签切换的地板(Select 要 2.5s)。第三方终端(宿主非 WT 的
   OpenConsole)仍如实报"没有可聚焦窗口"。
 
+**2026-09-01 「从没启动过的空壳」第三次实报 → 立规则**:seance 技能的 ask 把老
+会话复活成后台顾问信道,两个壳卡在 needs="send a prompt to start"(提示词从没
+送达,CC detail=「No response requested」),被 blocked→waiting 映射成红灯挂在顶栏。
+同一形态本周第三次(Goal 复活 / fork 交接壳 / seance ask),病根都在 CC 后台作业
+启动链。它不是"在等你回答"——原地没有任何问题可答。用户拍板:**超过 60 秒仍未
+启动的空壳视同残留**(grouping.UNSTARTED_NEEDS/UNSTARTED_GRACE_S;宽限期留给
+/fork 交接那几十秒),顶栏不画(顶栏过滤先排除 residual 再看 waiting/busy,否则
+blocked 壳会被"在等你"条件放行),deck 看板页列出并给「清理残留」;60 秒内照常
+亮红。附带一条 CC 命名事实:同名会话再起时 CC 自动加序号(注册表
+nameSource="collision",如「局域網數據庫 (3)」「seance (2)」),不是 ClaudeDeck 或
+seance 起的名。
+
 **2026-08-26 深夜:/fork 交接机制全貌(用户假设驱动的取证,全部实证)**:
 用户在"父"窗口输入 prompt 后格子消失,顺藤摸出 fork 的完整交接链:
 1. `/fork` 先创建一个**空壳后台子会话**(新 sid,needs="send a prompt to

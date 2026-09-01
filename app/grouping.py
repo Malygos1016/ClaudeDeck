@@ -14,7 +14,9 @@
 """
 from __future__ import annotations
 
-from typing import Iterable
+import time
+from datetime import datetime
+from typing import Any, Iterable
 
 FORK_MARK = "⑂"
 
@@ -22,6 +24,33 @@ FORK_MARK = "⑂"
 # 其无窗口的残留会话也不再占顶栏格子(2026-08-25 用户拍板:顶栏隐藏,
 # deck 看板页仍可见、可清理)。
 TERMINAL_JOB_STATES = {"stopped", "done", "failed"}
+
+# 从没启动过的空壳:后台作业起来了、注册了,首条提示词却从没送达,CC 把它记成
+# needs="send a prompt to start"、tempo=blocked。三次实报同一形态(Goal 复活 /
+# fork 交接壳 / seance ask),病根都在 CC 的后台作业启动链。它不是"在等你回答"
+# —— 原地没有任何问题可答,只能接管进去手动喂第一句或停掉。超过宽限期仍未启动
+# 的按残留处理(2026-09-01 用户拍板:顶栏隐藏,deck 看板页清理);宽限期是留给
+# /fork 交接的 —— 那几十秒里壳正等你在父窗口敲下一句,属正常过渡。
+UNSTARTED_NEEDS = "send a prompt to start"
+UNSTARTED_GRACE_S = 60.0
+
+
+def _iso_to_epoch(v: Any) -> float | None:
+    if not isinstance(v, str) or not v:
+        return None
+    try:
+        return datetime.fromisoformat(v.replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return None
+
+
+def _is_stale_shell(job: dict | None, member: dict, now: float) -> bool:
+    """空壳超过宽限期仍未启动。启动时刻取注册表的 startedAt(进程诞生),
+    拿不到时不判残留 —— 宁可多亮一盏灯,不把还在交接中的壳藏掉。"""
+    if not job or (job.get("needs") or "").strip() != UNSTARTED_NEEDS:
+        return False
+    started = _iso_to_epoch(member.get("started_at"))
+    return started is not None and (now - started) > UNSTARTED_GRACE_S
 
 # 一个窗口一盏灯:取窗口内最紧急的状态。数字越小越紧急。
 STATUS_RANK = {"waiting": 0, "busy": 1, "idle": 2}
@@ -187,6 +216,7 @@ def build_groups(
     sessions: list[dict],
     jobs: list[dict],
     absent_parents: dict[str, dict] | None = None,
+    now: float | None = None,
 ) -> list[dict]:
     """把活跃会话按「所属窗口」聚成组。
 
@@ -196,7 +226,10 @@ def build_groups(
     absent_parents 给出「已经关掉的 fork 父分支」的名字({sid: {"label": ...}}),
     由调用方从索引/标签里查好。fork 关系写在作业记录里,是子会话的固有属性,
     不随父进程存活与否消失,所以父关掉之后仍在树里列一个可恢复的灰节点。
+    now 只给空壳宽限期判定用(测试可注入),默认取当前时间。
     """
+    if now is None:
+        now = time.time()
     by_job = _job_index(jobs)
 
     # 1. 丢掉不该占格子的:
@@ -268,12 +301,11 @@ def build_groups(
         # 已关闭父分支的幽灵(没有进程也没有作业),只看根会把无窗口 fork 组的
         # attach_job_id 算丢 —— 格子点击两条分支都进不去,又回到"点了没反应"
         # (38bd36c 审阅发现的回归)。members 根在首位,顺序天然是根优先。
-        living_jobs = [
-            j for j in (
-                by_job.get(m.get("session_id"))
-                for m in members if m.get("present", True)
-            ) if j
+        living = [
+            (m, by_job.get(m.get("session_id")))
+            for m in members if m.get("present", True)
         ]
+        living_jobs = [j for _, j in living if j]
         attach_job_id = None
         if not has_window:
             attach_job_id = next(
@@ -281,12 +313,16 @@ def build_groups(
                  if j.get("job_id") and j.get("state") not in TERMINAL_JOB_STATES),
                 None,
             )
-        # 僵尸残留:无窗口 + 活着成员的作业全是终态,但进程还活着(否则注册表
-        # 条目早被验活剔除)。它永远不会"等你",不占顶栏格子;数据保持诚实地
-        # 返回,由前端各自决定画不画(deck 看板页显示并给清理入口)。
+        # 残留:无窗口 + 活着成员的作业全都"没戏"—— 要么已终态(僵尸:进程赖着
+        # 不走),要么是超过宽限期仍未启动的空壳。它们永远不会"等你",不占顶栏
+        # 格子;数据保持诚实地返回,由前端各自决定画不画(deck 看板页显示并给
+        # 清理入口)。
         residual = bool(
             not has_window and living_jobs
-            and all(j.get("state") in TERMINAL_JOB_STATES for j in living_jobs)
+            and all(
+                j.get("state") in TERMINAL_JOB_STATES or _is_stale_shell(j, m, now)
+                for m, j in living if j
+            )
         )
 
         groups.append(
