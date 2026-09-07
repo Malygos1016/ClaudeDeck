@@ -61,6 +61,10 @@ const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&":"&amp;","<"
 // 出生点固定锚在黄带起点(最靠左),不随黄带宽窄伸缩:出生点越靠右飞行路程越短、
 // 特效量越少,固定在起点才能保证够长的一段路。终点仍是「最右格子右缘+15%」。
 const SPAWN_W = 0.04;   // 飞块出生区固定宽度(屏宽比例)
+// 自愈重载阈值(见 loop 内注释):静止期满 6 小时即重载清掉 WebView2 长跑累积;
+// 12 小时硬上限兜底一直不静止的极端情况。间隔远大于人盯顶栏的时长,重载无感。
+const RELOAD_SOFT_MS = 6 * 3600 * 1000;
+const RELOAD_HARD_MS = 12 * 3600 * 1000;
 
 // 分区边界一律是「该类格子右缘 ÷ 屏幕宽」的归一化位置,不是窗口数量占比——
 // 数量占比与飞块终点(像素布局)是两套坐标,混用会让飞块生成在终点右侧倒飞。
@@ -237,6 +241,16 @@ void main() {
       S.dispRedEnd > 0.004 || S.dispYelEnd > 0.004 ||
       Math.abs(S.dispFade - S.fadeEnd) > 0.005 ||
       S.sqInt > 0.01 || S.finaleAt >= 0 || S.redPulseAt >= 0;
+    // 自愈重载:WebGL rAF 循环连续跑数日,WebView2 渲染进程的堆会缓慢累积
+    // (2026-09-01 实测:145 小时后该 renderer 739MB、帧率被压到半速 32fps;
+    // 刚重启是 61MB/60fps)。累积在 Chromium 合成器/GPU 侧,不在本页 JS ——
+    // measure/tick/rAF 均无每周期分配。boring 解法:静止期(无动画,重载无感)
+    // 到点重载当前 URL,把累积清零;ms 是页面加载起算的运行时长。硬上限兜底
+    // 极端情况(长时间一直有会话在忙,软阈值等不到静止)。
+    if (ms > RELOAD_HARD_MS || (ms > RELOAD_SOFT_MS && !animating)) {
+      location.reload();
+      return;
+    }
     if (ms - last >= (animating ? 0 : 200)) {
       last = ms;
       const dt = Math.min((ms - lastDraw) / 1000 || 0.033, 0.25);
