@@ -331,7 +331,17 @@ let prevRedCount = 0;     // 红带首现的脉冲边沿
    绿色不留在原地——同色必须连续,色带才能按像素贴合对应的格子。
    组内稳定:红/黄按首次出现先后;绿按变绿时刻倒序(最近完成的靠左)。
    作用对象是「格子」(一个窗口一个),不是原始会话,故以 key 标识。 */
-let order = [];                    // 持久出现顺序(格子 key),组内稳定用
+// 持久出现顺序(格子 key),组内稳定用。存进 localStorage:自愈重载(见 loop)
+// 是同源导航,localStorage 必定保留 —— 否则 reload 后 order 清空、退回服务端
+// 默认序,用户稳定下来的粘性排序会丢(2026-09-01 实报)。
+const ORDER_KEY = "cctopbar.order";
+let order = [];
+try { order = JSON.parse(localStorage.getItem(ORDER_KEY)) || []; } catch { order = []; }
+let orderSaved = JSON.stringify(order);
+function persistOrder() {
+  const s = JSON.stringify(order);
+  if (s !== orderSaved) { try { localStorage.setItem(ORDER_KEY, s); orderSaved = s; } catch {} }
+}
 const prevStatus = new Map();
 const greenAt = new Map();         // key → 变绿时刻(绿组内排序用)
 
@@ -340,6 +350,7 @@ function applyOrder(sessions) {
   order = order.filter((id) => by.has(id));
   const known = new Set(order);
   for (const s of sessions) if (!known.has(s.key)) order.push(s.key);
+  persistOrder();   // order 定型即落盘,跨自愈重载保住粘性顺序
 
   const isIdle = (st) => st !== "waiting" && st !== "busy";
   const now = performance.now();
